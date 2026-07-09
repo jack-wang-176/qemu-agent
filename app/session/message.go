@@ -1,4 +1,4 @@
-package main
+package session
 
 import (
 	"github.com/openai/openai-go/v3"
