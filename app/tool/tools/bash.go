@@ -2,6 +2,7 @@ package tools
 
 import (
 	"encoding/json"
+	"fmt"
 	"os/exec"
 
 	openai "github.com/openai/openai-go/v3"
@@ -42,7 +43,7 @@ func (bt *BashTool) Execute(args string) (string, error) {
 	cmd := exec.Command("bash", "-c", arg.Command)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", err
+		return fmt.Sprintf("%s\n[exit error] %v", output, err), nil
 	}
 	return string(output), nil
 }
