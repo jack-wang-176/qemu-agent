@@ -40,7 +40,7 @@ app/
 
 ## 演进路线
 
-详见 `qemu/claude-suggestion/` 下的四份建议文档：
+详见 `qemu/ai-docs/agent-architecture/` 下的四份建议文档：
 
 1. `01-general-agent-gaps.md` —— 通用 Agent 缺失功能补充
 2. `02-qemu-peripheral-modeling.md` —— 面向 QEMU 嵌入式外设建模的能力适配（**核心**）

@@ -16,13 +16,12 @@ func (s *Session) SnapShot() error {
 		return err
 	}
 	filePath := path.Join(sessionPath, fmt.Sprintf("%s.json", s.Id))
-	data, err := json.MarshalIndent(s, "", "")
+	data, err := json.MarshalIndent(s, "", " ")
 	if err != nil {
 		//todo add log deal
 		return err
 	}
-	if err != os.WriteFile(filePath, data, 0644) {
-		//todo add log deal
+	if err = os.WriteFile(filePath, data, 0644); err != nil {
 		return err
 	}
 	return nil
