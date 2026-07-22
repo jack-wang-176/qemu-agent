@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 
 	"github.com/jack-wang-176/qemu-agent/internal/llm"
 	"github.com/jack-wang-176/qemu-agent/internal/session"
@@ -24,7 +23,7 @@ func (a *Agent) Run(ctx context.Context, s *session.Session, input string) (stri
 		original := s.MessageCopy()
 		trimmed, used, err := a.ctxmgr.EnforceBudget(ctx, s.Model, original)
 		if err != nil {
-			log.Printf("context warning: %v", err)
+			a.logger.WarnContext(ctx, "enforce context budget", "err", err)
 		} else {
 			/* token limit hit replaced compacted.*/
 			s.MessageReplace(trimmed, used)
