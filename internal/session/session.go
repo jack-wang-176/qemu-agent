@@ -22,6 +22,7 @@ func NewSession(traceId, systemPrompt, model string) *Session {
 		ID:         uuid.NewString(),
 		TraceID:    traceId,
 		TokenUsage: 0,
+		Model:      model,
 		Messages:   make([]llm.Message, 0),
 		UpdatedAt:  time.Now(),
 		CreatedAt:  time.Now(),
