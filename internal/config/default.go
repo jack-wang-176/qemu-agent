@@ -10,6 +10,8 @@ const (
 	DefaultKeepRecentTurns  = 4
 	DefaultToolMaxOutput    = 64 * 1024
 	DefaultReadMaxLines     = 500
+	DefaultLogLevel         = "info"
+	DefaultLogFormat        = "text"
 
 	DefaultOpenRouterBaseURL = "https://openrouter.ai/api/v1"
 	DefaultOpenAIBaseURL     = "https://api.openai.com/v1"

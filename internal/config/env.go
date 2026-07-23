@@ -10,7 +10,7 @@ import (
 )
 
 /* below function parse env into project*/
-func envString(lookup LookEnv, key, fallback string) string {
+func envString(lookup LookupEnv, key, fallback string) string {
 	value, ok := lookup(key)
 	if !ok || strings.TrimSpace(value) == "" {
 		return fallback
@@ -18,7 +18,7 @@ func envString(lookup LookEnv, key, fallback string) string {
 	return strings.TrimSpace(value)
 }
 
-func envInt(lookup LookEnv, key string, fallback int) (int, error) {
+func envInt(lookup LookupEnv, key string, fallback int) (int, error) {
 	raw, ok := lookup(key)
 	if !ok || strings.TrimSpace(raw) == "" {
 		return fallback, nil
@@ -30,7 +30,7 @@ func envInt(lookup LookEnv, key string, fallback int) (int, error) {
 	return result, nil
 }
 
-func envBool(lookup LookEnv, key string, fallback bool) (bool, error) {
+func envBool(lookup LookupEnv, key string, fallback bool) (bool, error) {
 	raw, ok := lookup(key)
 	if !ok || strings.TrimSpace(raw) == "" {
 		return fallback, nil
@@ -42,7 +42,7 @@ func envBool(lookup LookEnv, key string, fallback bool) (bool, error) {
 	return result, nil
 }
 
-func envDuration(lookup LookEnv, key string, fallback time.Duration) (time.Duration, error) {
+func envDuration(lookup LookupEnv, key string, fallback time.Duration) (time.Duration, error) {
 	raw, ok := lookup(key)
 	if !ok || strings.TrimSpace(raw) == "" {
 		return fallback, nil
@@ -54,26 +54,7 @@ func envDuration(lookup LookEnv, key string, fallback time.Duration) (time.Durat
 	return value, nil
 }
 
-func envInt64List(lookup LookEnv, key string) ([]int64, error) {
-	raw, ok := lookup(key)
-	if !ok || strings.TrimSpace(raw) == "" {
-		return nil, nil
-	}
-	parts := strings.Split(raw, ",")
-	result := make([]int64, 0, len(parts))
-	for _, part := range parts {
-		item := strings.TrimSpace(part)
-		value, err := strconv.ParseInt(item, 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("parse %s item %q as int64: %w", key, item, err)
-		}
-		result = append(result, value)
-	}
-	return result, nil
-}
-
-/* this funciton resolve file path. */
-func resolveDataDir(lookup LookEnv) (string, error) {
+func resolveDataDir(lookup LookupEnv) (string, error) {
 	if value := envString(lookup, "QEMU_AGENT_DATA_DIR", ""); value != "" {
 		/* insurance the file path is absolute path. */
 		absolute, err := filepath.Abs(value)
@@ -89,7 +70,7 @@ func resolveDataDir(lookup LookEnv) (string, error) {
 	return filepath.Join(root, "qemu-agent"), nil
 }
 
-func resolveWorkspace(lookup LookEnv) (string, error) {
+func resolveWorkspace(lookup LookupEnv) (string, error) {
 	value := envString(lookup, "QEMU_AGENT_WORKSPACE", "")
 	if value == "" {
 		current, err := os.Getwd()
@@ -105,8 +86,9 @@ func resolveWorkspace(lookup LookEnv) (string, error) {
 	return filepath.Clean(absolute), nil
 }
 
-/* LoadEnv build a comprehensive config and return. this stage do not consider override. */
-func LoadEnv(lookup LookEnv) (Config, error) {
+// LoadEnv reads environment-backed values without performing final validation.
+// Validation is delayed until explicit overrides have been applied.
+func LoadEnv(lookup LookupEnv) (Config, error) {
 	maxTurns, err := envInt(lookup, "QEMU_AGENT_MAX_TURNS", DefaultMaxTurns)
 	if err != nil {
 		return Config{}, err
@@ -123,7 +105,7 @@ func LoadEnv(lookup LookEnv) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	stream, err := envBool(lookup, "QEMU_AGENT_STREAM", true)
+	stream, err := envBool(lookup, "QEMU_AGENT_STREAM", false)
 	if err != nil {
 		return Config{}, err
 	}
@@ -162,12 +144,14 @@ func LoadEnv(lookup LookEnv) (Config, error) {
 
 	cfg := Config{
 		Agent: AgentConfig{
-			Provider:         envString(lookup, "QEMU_AGENT_PROVIDER", DefaultProvider),
-			Model:            model,
-			MaxTurns:         maxTurns,
-			MaxContextTokens: maxContext,
-			KeepRecentTurns:  keepRecent,
-			Stream:           stream,
+			Provider: envString(lookup, "QEMU_AGENT_PROVIDER", DefaultProvider),
+			Model:    model,
+			MaxTurns: maxTurns,
+			Stream:   stream,
+		},
+		Context: ContextConfig{
+			MaxTokens:       maxContext,
+			KeepRecentTurns: keepRecent,
 		},
 		Paths: PathConfig{
 			DataDir:    dataDir,
@@ -180,25 +164,21 @@ func LoadEnv(lookup LookEnv) (Config, error) {
 			ReadMaxLines:   readMaxLines,
 		},
 		Log: LogConfig{
-			Level:  envString(lookup, "QEMU_AGENT_LOG_LEVEL", "info"),
-			Format: envString(lookup, "QEMU_AGENT_LOG_FORMAT", "text"),
+			Level:  envString(lookup, "QEMU_AGENT_LOG_LEVEL", DefaultLogLevel),
+			Format: envString(lookup, "QEMU_AGENT_LOG_FORMAT", DefaultLogFormat),
 		},
-		OpenRouter: APIConfig{
-			APIKey: envString(lookup, "OPENROUTER_API_KEY", ""),
-			BaseURL: envString(
-				lookup, "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1",
-			),
-		},
-		OpenAI: APIConfig{
-			APIKey: envString(lookup, "OPENAI_API_KEY", ""),
-			BaseURL: envString(
-				lookup, "OPENAI_BASE_URL", "https://api.openai.com/v1",
-			),
-		},
-		Ollama: APIConfig{
-			BaseURL: envString(
-				lookup, "OLLAMA_BASE_URL", "http://localhost:11434/v1",
-			),
+		Providers: ProviderConfig{
+			OpenRouter: APIConfig{
+				APIKey:  envString(lookup, "OPENROUTER_API_KEY", ""),
+				BaseURL: envString(lookup, "OPENROUTER_BASE_URL", DefaultOpenRouterBaseURL),
+			},
+			OpenAI: APIConfig{
+				APIKey:  envString(lookup, "OPENAI_API_KEY", ""),
+				BaseURL: envString(lookup, "OPENAI_BASE_URL", DefaultOpenAIBaseURL),
+			},
+			Ollama: APIConfig{
+				BaseURL: envString(lookup, "OLLAMA_BASE_URL", DefaultOllamaBaseURL),
+			},
 		},
 	}
 
