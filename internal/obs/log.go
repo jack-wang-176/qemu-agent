@@ -11,6 +11,9 @@ import (
 
 /* use logconfig to build slog instance. */
 func NewLogger(cfg config.LogConfig, output io.Writer) (*slog.Logger, error) {
+	if output == nil {
+		return nil, errors.New("log output is nil")
+	}
 	var level slog.Level
 	if err := level.UnmarshalText([]byte(strings.ToLower(cfg.Level))); err != nil {
 		return nil, errors.New("invalid log level: " + cfg.Level)
@@ -32,6 +35,5 @@ func NewLogger(cfg config.LogConfig, output io.Writer) (*slog.Logger, error) {
 
 	logger := slog.New(handler)
 
-	slog.SetDefault(logger)
 	return logger, nil
 }

@@ -38,19 +38,26 @@ func (c *CompactorManager) EnforceBudget(ctx context.Context, model string, msgs
 	/* convert into history recover after compacting.*/
 	history, err := session.ConvertIntoHistory(currentMsgs)
 	if err != nil {
-		return currentMsgs, currentToken, fmt.Errorf("fail to converinto history")
+		return currentMsgs, currentToken, fmt.Errorf("convert messages into history: %w", err)
 	}
 	for _, compactor := range c.Compactors {
 		newHistory, success, err := compactor.Compact(ctx, model, history)
-		if err != nil || !success {
+		if err != nil {
 			return currentMsgs, currentToken, fmt.Errorf("compactor %s failed: %w", compactor.Name(), err)
 		}
+		if !success {
+			continue
+		}
+		history = newHistory
 		currentMsgs = newHistory.History()
+		currentToken = c.Tokenizer.Count(currentMsgs)
+		if currentToken < c.MaxToken {
+			return currentMsgs, currentToken, nil
+		}
 	}
 	currentToken = c.Tokenizer.Count(currentMsgs)
 	if currentToken < c.MaxToken {
 		return currentMsgs, currentToken, nil
-	} else {
-		return currentMsgs, currentToken, fmt.Errorf("use all compactor but still")
 	}
+	return currentMsgs, currentToken, fmt.Errorf("context remains over budget after all compactors: %d >= %d", currentToken, c.MaxToken)
 }

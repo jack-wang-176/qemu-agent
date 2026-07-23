@@ -9,12 +9,12 @@ import (
 )
 
 /* this function register series of tool. */
-func BuildToolManager(cfg config.Config) (*tools.Manager, error) {
+func BuildToolManager(paths config.PathConfig, cfg config.ToolConfig) (*tools.Manager, error) {
 	manager := tools.NewManager()
 	toolSet := []tools.Tool{
-		&builtin.ReadTool{},
-		&builtin.WriteTool{},
-		&builtin.BashTool{},
+		builtin.NewReadTool(paths.Workspace, cfg.ReadMaxLines),
+		builtin.NewWriteTool(paths.Workspace),
+		builtin.NewBashTool(paths.Workspace, cfg.Timeout, cfg.MaxOutputBytes),
 	}
 	for _, tool := range toolSet {
 		if err := manager.Register(tool); err != nil {

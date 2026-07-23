@@ -15,20 +15,20 @@ func BuildProvider(cfg config.Config) (llm.Provider, error) {
 	case "openrouter":
 		return llm.NewOpenAIProvider(
 			"openrouter",
-			cfg.OpenRouter.APIKey,
-			cfg.OpenRouter.BaseURL,
+			cfg.Providers.OpenRouter.APIKey,
+			cfg.Providers.OpenRouter.BaseURL,
 		), nil
 	case "openai":
 		return llm.NewOpenAIProvider(
 			"openai",
-			cfg.OpenAI.APIKey,
-			cfg.OpenAI.BaseURL,
+			cfg.Providers.OpenAI.APIKey,
+			cfg.Providers.OpenAI.BaseURL,
 		), nil
 	case "ollama":
 		return llm.NewOpenAIProvider(
 			"ollama",
 			"ollama",
-			cfg.Ollama.BaseURL,
+			cfg.Providers.Ollama.BaseURL,
 		), nil
 	default:
 		return nil, fmt.Errorf(

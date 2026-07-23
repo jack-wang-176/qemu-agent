@@ -1,60 +1,49 @@
 package agent
 
 import (
+	"context"
 	"errors"
-	"fmt"
-	"io"
 	"log/slog"
-	"strings"
 
-	"github.com/jack-wang-176/qemu-agent/internal/contextmgr"
 	"github.com/jack-wang-176/qemu-agent/internal/llm"
 	"github.com/jack-wang-176/qemu-agent/internal/session"
-	"github.com/jack-wang-176/qemu-agent/internal/tools"
 )
 
-/* config of model*/
+// Config contains Agent loop behavior only. Model selection belongs to Session.
 type Config struct {
-	Model    string
 	MaxTurns int
 	Stream   bool
 }
 
-/* simple dependencies injection struct*/
-type Dependencies struct {
-	Provider llm.Provider
-	Tools    *tools.Manager
-	Store    session.Store
-	Context  *contextmgr.CompactorManager
+type ToolExecutor interface {
+	Schemas() []llm.ToolSchema
+	Execute(ctx context.Context, name, args string) (string, error)
 }
 
-/* generated all component together.*/
+type ContextManager interface {
+	EnforceBudget(ctx context.Context, model string, msgs []llm.Message) ([]llm.Message, int, error)
+}
+
+// Dependencies contains runtime capabilities required by Agent.
+type Dependencies struct {
+	Provider llm.Provider
+	Tools    ToolExecutor
+	Store    session.Store
+	Context  ContextManager
+	Logger   *slog.Logger
+}
+
 type Agent struct {
 	provider llm.Provider
-	tools    *tools.Manager
-	ctxmgr   *contextmgr.CompactorManager
+	tools    ToolExecutor
+	ctxmgr   ContextManager
 	store    session.Store
-	model    string
 	maxTurns int
 	stream   bool
 	logger   *slog.Logger
 }
 
-/* option deal extre config of agent. */
-type Option func(*Agent) error
-
-/* add slog to agent. */
-func WithLogger(logger *slog.Logger) Option {
-	return func(agent *Agent) error {
-		if logger == nil {
-			return errors.New("logger is nil")
-		}
-		agent.logger = logger
-		return nil
-	}
-}
-
-func New(deps Dependencies, cfg Config, options ...Option) (*Agent, error) {
+func New(deps Dependencies, cfg Config) (*Agent, error) {
 	if deps.Provider == nil {
 		return nil, errors.New("provider is nil")
 	}
@@ -67,33 +56,23 @@ func New(deps Dependencies, cfg Config, options ...Option) (*Agent, error) {
 	if deps.Context == nil {
 		return nil, errors.New("context manager is nil")
 	}
-	if strings.TrimSpace(cfg.Model) == "" {
-		return nil, errors.New("model is empty")
+	if deps.Logger == nil {
+		return nil, errors.New("logger is nil")
 	}
 	if cfg.MaxTurns <= 0 {
 		return nil, errors.New("max turns must be positive")
 	}
+	if cfg.Stream && !deps.Provider.Capability().Streaming {
+		return nil, errors.New("configured provider does not support streaming")
+	}
 
-	result := &Agent{
+	return &Agent{
 		provider: deps.Provider,
 		tools:    deps.Tools,
 		store:    deps.Store,
 		ctxmgr:   deps.Context,
-		model:    cfg.Model,
 		maxTurns: cfg.MaxTurns,
 		stream:   cfg.Stream,
-		logger: slog.New(
-			slog.NewTextHandler(io.Discard, nil),
-		),
-	}
-
-	for _, option := range options {
-		if option == nil {
-			return nil, errors.New("agent option is nil")
-		}
-		if err := option(result); err != nil {
-			return nil, fmt.Errorf("apply agent option: %w", err)
-		}
-	}
-	return result, nil
+		logger:   deps.Logger,
+	}, nil
 }
