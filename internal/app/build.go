@@ -36,6 +36,10 @@ func Build(input BuildInput) (*Runtime, error) {
 	}
 
 	store := session.NewFileStore(input.Config.Paths.SessionDir)
+	registry, err := build.BuildSessionRegistry(input.Config.Agent, store, input.SystemPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("build session registry: %w", err)
+	}
 
 	manager, err := build.BuildToolManager(input.Config.Paths, input.Config.Tools)
 	if err != nil {
@@ -68,17 +72,11 @@ func Build(input BuildInput) (*Runtime, error) {
 		return nil, fmt.Errorf("build agent: %w", err)
 	}
 
-	application, err := NewApplication(
-		Dependencies{
-			Runner: runner,
-			Store:  store,
-			Logger: logger,
-		},
-		Config{
-			DefaultModel: input.Config.Agent.Model,
-			SystemPrompt: input.SystemPrompt,
-		},
-	)
+	application, err := NewApplication(Dependencies{
+		Runner:   runner,
+		Sessions: registry,
+		Logger:   logger,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("build application: %w", err)
 	}
