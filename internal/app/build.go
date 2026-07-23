@@ -37,13 +37,14 @@ func Build(input BuildInput) (*Runtime, error) {
 
 	store := session.NewFileStore(input.Config.Paths.SessionDir)
 
-	manager, err := build.BuildToolManager(input.Config)
+	manager, err := build.BuildToolManager(input.Config.Paths, input.Config.Tools)
 	if err != nil {
 		return nil, fmt.Errorf("build tool manager: %w", err)
 	}
 
 	contextManager, err := build.BuildContextManager(
-		input.Config,
+		input.Config.Agent,
+		input.Config.Context,
 		provider,
 	)
 	if err != nil {
@@ -56,32 +57,33 @@ func Build(input BuildInput) (*Runtime, error) {
 			Tools:    manager,
 			Store:    store,
 			Context:  contextManager,
+			Logger:   logger,
 		},
 		agent.Config{
-			Model:    input.Config.Agent.Model,
 			MaxTurns: input.Config.Agent.MaxTurns,
 			Stream:   input.Config.Agent.Stream,
 		},
-		agent.WithLogger(logger),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("build agent: %w", err)
 	}
 
 	application, err := NewApplication(
-		runner,
-		input.Config.Agent.Model,
-		input.SystemPrompt,
-		logger,
+		Dependencies{
+			Runner: runner,
+			Store:  store,
+			Logger: logger,
+		},
+		Config{
+			DefaultModel: input.Config.Agent.Model,
+			SystemPrompt: input.SystemPrompt,
+		},
 	)
 	if err != nil {
 		return nil, fmt.Errorf("build application: %w", err)
 	}
 
-	logger.Info(
-		"application built",
-		"config",
-	)
+	logger.Info("application built", "config", input.Config.Summary())
 	return &Runtime{
 		Application: application,
 		Logger:      logger,

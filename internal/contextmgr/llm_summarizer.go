@@ -12,13 +12,13 @@ import (
 )
 
 type LLMSummarizer struct {
-	Provider *llm.OpenAIProvider
+	Provider llm.Provider
 	/* this mean keep recent turn.*/
 	KeepRecent int
 	Model      string
 }
 
-func NewLLMSummarizer(cli *llm.OpenAIProvider, keeprecent int, model string) *LLMSummarizer {
+func NewLLMSummarizer(cli llm.Provider, keeprecent int, model string) *LLMSummarizer {
 	return &LLMSummarizer{
 		Provider:   cli,
 		KeepRecent: keeprecent,

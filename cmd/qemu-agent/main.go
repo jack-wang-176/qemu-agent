@@ -5,11 +5,12 @@ import (
 	_ "embed"
 	"flag"
 	"fmt"
-
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/google/uuid"
 	"github.com/jack-wang-176/qemu-agent/internal/app"
 	"github.com/jack-wang-176/qemu-agent/internal/config"
 )
@@ -25,35 +26,42 @@ type flags struct {
 }
 
 /* use flag input to parse flag struct. */
-func parseFlags() flags {
-	prompt := flag.String("p", "", "prompt to send to the agent")
-	provider := flag.String("provider", "", "override provider")
-	model := flag.String("model", "", "override model")
-	maxTurns := flag.Int("max-turns", 0, "override maximum turns")
-	flag.Parse()
-	return flags{
-		Prompt:   *prompt,
-		Provider: *provider,
-		Model:    *model,
-		MaxTurns: *maxTurns,
+func parseFlags(args []string, output io.Writer) (flags, map[string]bool, error) {
+	set := flag.NewFlagSet("qemu-agent", flag.ContinueOnError)
+	set.SetOutput(output)
+	var result flags
+	set.StringVar(&result.Prompt, "p", "", "prompt to send to the agent")
+	set.StringVar(&result.Provider, "provider", "", "override provider")
+	set.StringVar(&result.Model, "model", "", "override model")
+	set.IntVar(&result.MaxTurns, "max-turns", 0, "override maximum turns")
+	if err := set.Parse(args); err != nil {
+		return flags{}, nil, err
 	}
+	visited := make(map[string]bool)
+	set.Visit(func(item *flag.Flag) {
+		visited[item.Name] = true
+	})
+	return result, visited, nil
 }
 
 /* main supposed to be very simple. */
 func main() {
-	os.Exit(run())
+	os.Exit(run(os.Args[1:]))
 }
 
 /* run initialize certain run behavior*/
-func run() int {
-	flags := parseFlags()
+func run(args []string) int {
+	flags, visited, err := parseFlags(args, os.Stderr)
+	if err != nil {
+		return 2
+	}
 	if flags.Prompt == "" {
 		fmt.Fprintln(os.Stderr, "-p prompt is required")
 		return 2
 	}
 
 	/* load config initializing config behavior/ */
-	cfg, err := config.LoadFromOS(flags.Overrides())
+	cfg, err := config.LoadFromOS(flags.Overrides(visited))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
@@ -80,7 +88,7 @@ func run() int {
 
 	answer, err := runtime.Application.RunOnce(
 		ctx,
-		"cli:oneshot",
+		newTraceID(),
 		flags.Prompt,
 	)
 	if err != nil {
@@ -92,16 +100,20 @@ func run() int {
 	return 0
 }
 
-func (f flags) Overrides() config.Overrides {
+func (f flags) Overrides(visited map[string]bool) config.Overrides {
 	var result config.Overrides
-	if f.Provider != "" {
+	if visited["provider"] {
 		result.Provider = &f.Provider
 	}
-	if f.Model != "" {
+	if visited["model"] {
 		result.Model = &f.Model
 	}
-	if f.MaxTurns != 0 {
+	if visited["max-turns"] {
 		result.MaxTurns = &f.MaxTurns
 	}
 	return result
+}
+
+func newTraceID() string {
+	return "cli-" + uuid.NewString()
 }
