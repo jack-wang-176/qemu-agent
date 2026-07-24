@@ -49,3 +49,72 @@ func TestSummaryDoesNotExposeAPIKeys(t *testing.T) {
 		t.Fatal("Summary exposed API key")
 	}
 }
+
+func TestLoadPopulatesCLIConfigDefaults(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg, err := Load(lookupFrom(map[string]string{
+		"QEMU_AGENT_PROVIDER":  "ollama",
+		"QEMU_AGENT_WORKSPACE": t.TempDir(),
+	}), Overrides{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Channel.CLISessionKey != DefaultCLISessionKey {
+		t.Fatalf("session key = %q", cfg.Channel.CLISessionKey)
+	}
+	if cfg.Channel.CLIPrompt != DefaultCLIPrompt {
+		t.Fatalf("prompt = %q", cfg.Channel.CLIPrompt)
+	}
+	if cfg.Channel.MaxInputBytes != DefaultMaxInputBytes {
+		t.Fatalf("max input bytes = %d", cfg.Channel.MaxInputBytes)
+	}
+}
+
+func TestLoadPopulatesCLIConfigFromEnvironment(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg, err := Load(lookupFrom(map[string]string{
+		"QEMU_AGENT_PROVIDER":            "ollama",
+		"QEMU_AGENT_WORKSPACE":           t.TempDir(),
+		"QEMU_AGENT_CLI_SESSION_KEY":     "cli:project",
+		"QEMU_AGENT_CLI_PROMPT":          "agent>",
+		"QEMU_AGENT_CLI_MAX_INPUT_BYTES": "4096",
+	}), Overrides{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Channel.CLISessionKey != "cli:project" || cfg.Channel.CLIPrompt != "agent>" || cfg.Channel.MaxInputBytes != 4096 {
+		t.Fatalf("channel config = %#v", cfg.Channel)
+	}
+}
+
+func TestChannelConfigValidation(t *testing.T) {
+	base := Config{
+		Agent:     AgentConfig{Provider: "ollama", Model: "model", MaxTurns: 1},
+		Context:   ContextConfig{MaxTokens: 1},
+		Paths:     PathConfig{Workspace: t.TempDir()},
+		Tools:     ToolConfig{Timeout: 1, MaxOutputBytes: 1, ReadMaxLines: 1},
+		Log:       LogConfig{Level: "info", Format: "text"},
+		Providers: ProviderConfig{Ollama: APIConfig{BaseURL: DefaultOllamaBaseURL}},
+		Channel:   ChannelConfig{CLISessionKey: DefaultCLISessionKey, CLIPrompt: DefaultCLIPrompt, MaxInputBytes: DefaultMaxInputBytes},
+	}
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{name: "empty key", mutate: func(cfg *Config) { cfg.Channel.CLISessionKey = "" }},
+		{name: "wrong key prefix", mutate: func(cfg *Config) { cfg.Channel.CLISessionKey = "telegram:1" }},
+		{name: "empty prompt", mutate: func(cfg *Config) { cfg.Channel.CLIPrompt = "" }},
+		{name: "NUL prompt", mutate: func(cfg *Config) { cfg.Channel.CLIPrompt = ">\x00" }},
+		{name: "zero size", mutate: func(cfg *Config) { cfg.Channel.MaxInputBytes = 0 }},
+		{name: "oversized", mutate: func(cfg *Config) { cfg.Channel.MaxInputBytes = MaxCLIInputBytes + 1 }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := base
+			test.mutate(&cfg)
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("Validate() error = nil")
+			}
+		})
+	}
+}

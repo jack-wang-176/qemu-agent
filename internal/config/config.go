@@ -16,6 +16,7 @@ type Config struct {
 	Tools     ToolConfig
 	Log       LogConfig
 	Providers ProviderConfig
+	Channel   ChannelConfig
 }
 
 type AgentConfig struct {
@@ -56,6 +57,12 @@ type ProviderConfig struct {
 	OpenRouter APIConfig
 	OpenAI     APIConfig
 	Ollama     APIConfig
+}
+
+type ChannelConfig struct {
+	CLISessionKey string
+	CLIPrompt     string
+	MaxInputBytes int
 }
 
 func LoadFromOS(overrides Overrides) (Config, error) {

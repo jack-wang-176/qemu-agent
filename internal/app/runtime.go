@@ -4,11 +4,14 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+
+	"github.com/jack-wang-176/qemu-agent/internal/channel"
 )
 
 type Runtime struct {
 	Application *Application
 	Logger      *slog.Logger
+	Channels    []channel.Channel
 	closers     []io.Closer
 }
 

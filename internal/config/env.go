@@ -89,7 +89,12 @@ func resolveWorkspace(lookup LookupEnv) (string, error) {
 // LoadEnv reads environment-backed values without performing final validation.
 // Validation is delayed until explicit overrides have been applied.
 func LoadEnv(lookup LookupEnv) (Config, error) {
+	// Agent load config
 	maxTurns, err := envInt(lookup, "QEMU_AGENT_MAX_TURNS", DefaultMaxTurns)
+	if err != nil {
+		return Config{}, err
+	}
+	stream, err := envBool(lookup, "QEMU_AGENT_STREAM", false)
 	if err != nil {
 		return Config{}, err
 	}
@@ -105,10 +110,7 @@ func LoadEnv(lookup LookupEnv) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	stream, err := envBool(lookup, "QEMU_AGENT_STREAM", false)
-	if err != nil {
-		return Config{}, err
-	}
+	// tool config read
 	toolTimeout, err := envDuration(
 		lookup, "QEMU_AGENT_TOOL_TIMEOUT", DefaultToolTimeout,
 	)
@@ -132,7 +134,13 @@ func LoadEnv(lookup LookupEnv) (Config, error) {
 	if model == "" {
 		model = envString(lookup, "OPENROUTER_MODEL_NAME", DefaultModel)
 	}
+	// channel config read
+	maxInputBytes, err := envInt(lookup, "QEMU_AGENT_CLI_MAX_INPUT_BYTES", DefaultMaxInputBytes)
+	if err != nil {
+		return Config{}, err
+	}
 
+	//workspace and data direction read
 	dataDir, err := resolveDataDir(lookup)
 	if err != nil {
 		return Config{}, err
@@ -142,6 +150,7 @@ func LoadEnv(lookup LookupEnv) (Config, error) {
 		return Config{}, err
 	}
 
+	// general config build
 	cfg := Config{
 		Agent: AgentConfig{
 			Provider: envString(lookup, "QEMU_AGENT_PROVIDER", DefaultProvider),
@@ -179,6 +188,11 @@ func LoadEnv(lookup LookupEnv) (Config, error) {
 			Ollama: APIConfig{
 				BaseURL: envString(lookup, "OLLAMA_BASE_URL", DefaultOllamaBaseURL),
 			},
+		},
+		Channel: ChannelConfig{
+			CLISessionKey: envString(lookup, "QEMU_AGENT_CLI_SESSION_KEY", DefaultCLISessionKey),
+			CLIPrompt:     envString(lookup, "QEMU_AGENT_CLI_PROMPT", DefaultCLIPrompt),
+			MaxInputBytes: maxInputBytes,
 		},
 	}
 
