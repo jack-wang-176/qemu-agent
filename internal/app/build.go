@@ -1,11 +1,14 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"io"
 
 	"github.com/jack-wang-176/qemu-agent/internal/agent"
 	"github.com/jack-wang-176/qemu-agent/internal/app/build"
+	"github.com/jack-wang-176/qemu-agent/internal/channel"
+	"github.com/jack-wang-176/qemu-agent/internal/channel/cli"
 	"github.com/jack-wang-176/qemu-agent/internal/config"
 	"github.com/jack-wang-176/qemu-agent/internal/obs"
 	"github.com/jack-wang-176/qemu-agent/internal/session"
@@ -15,10 +18,33 @@ type BuildInput struct {
 	Config       config.Config
 	SystemPrompt string
 	LogOutput    io.Writer
+	CLI          CLIAdapters
+}
+
+type CLIAdapters struct {
+	Input     io.Reader
+	Output    io.Writer
+	ErrOutput io.Writer
+}
+
+func validateBuildInput(input BuildInput) error {
+	if input.LogOutput == nil {
+		return errors.New("build log output is nil")
+	}
+	if input.CLI.Input == nil {
+		return errors.New("build CLI input is nil")
+	}
+	if input.CLI.Output == nil {
+		return errors.New("build CLI output is nil")
+	}
+	if input.CLI.ErrOutput == nil {
+		return errors.New("build CLI error output is nil")
+	}
+	return input.Config.Validate()
 }
 
 func Build(input BuildInput) (*Runtime, error) {
-	if err := input.Config.Validate(); err != nil {
+	if err := validateBuildInput(input); err != nil {
 		return nil, fmt.Errorf("validate config: %w", err)
 	}
 
@@ -91,9 +117,25 @@ func Build(input BuildInput) (*Runtime, error) {
 		return nil, fmt.Errorf("build application: %w", err)
 	}
 
+	cliChannel, err := cli.NewCLI(cli.Dependencies{
+		Input:     input.CLI.Input,
+		Output:    input.CLI.Output,
+		ErrOutput: input.CLI.ErrOutput,
+		Renderer:  cli.NewTextRenderer(),
+		Logger:    logger,
+	}, cli.Config{
+		Prompt:        input.Config.Channel.CLIPrompt,
+		SessionKey:    input.Config.Channel.CLISessionKey,
+		MaxInputBytes: input.Config.Channel.MaxInputBytes,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("build CLI channel: %w", err)
+	}
+
 	logger.Info("application built", "config", input.Config.Summary())
 	return &Runtime{
 		Application: application,
 		Logger:      logger,
+		Channels:    []channel.Channel{cliChannel},
 	}, nil
 }
