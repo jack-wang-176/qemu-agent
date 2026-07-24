@@ -11,6 +11,24 @@ import (
 var ErrNilEnvironmentLookup = errors.New("environment lookup is nil")
 
 func (c Config) Validate() error {
+	// context config validate
+	if c.Context.KeepRecentTurns < 0 {
+		return errors.New("QEMU_AGENT_KEEP_RECENT_TURNS must be >= 0")
+	}
+	if c.Context.MaxTokens <= 0 {
+		return errors.New("QEMU_AGENT_MAX_CONTEXT_TOKENS must be > 0")
+	}
+	// tool config validate
+	if c.Tools.Timeout <= 0 {
+		return errors.New("tool timeout must be > 0")
+	}
+	if c.Tools.MaxOutputBytes <= 0 {
+		return errors.New("tool max output must be > 0")
+	}
+	if c.Tools.ReadMaxLines <= 0 {
+		return errors.New("read max lines must be > 0")
+	}
+	// agent config validate
 	if strings.TrimSpace(c.Agent.Provider) == "" {
 		return errors.New("QEMU_AGENT_PROVIDER is empty")
 	}
@@ -20,23 +38,8 @@ func (c Config) Validate() error {
 	if c.Agent.MaxTurns <= 0 {
 		return fmt.Errorf("QEMU_AGENT_MAX_TURNS must be > 0, got %d", c.Agent.MaxTurns)
 	}
-	if c.Context.MaxTokens <= 0 {
-		return errors.New("QEMU_AGENT_MAX_CONTEXT_TOKENS must be > 0")
-	}
-	if c.Context.KeepRecentTurns < 0 {
-		return errors.New("QEMU_AGENT_KEEP_RECENT_TURNS must be >= 0")
-	}
 	if c.Agent.Stream {
 		return errors.New("QEMU_AGENT_STREAM=true is not supported yet")
-	}
-	if c.Tools.Timeout <= 0 {
-		return errors.New("tool timeout must be > 0")
-	}
-	if c.Tools.MaxOutputBytes <= 0 {
-		return errors.New("tool max output must be > 0")
-	}
-	if c.Tools.ReadMaxLines <= 0 {
-		return errors.New("read max lines must be > 0")
 	}
 
 	switch c.Agent.Provider {
@@ -67,12 +70,34 @@ func (c Config) Validate() error {
 	default:
 		return fmt.Errorf("unsupported log level %q", c.Log.Level)
 	}
+	// log config validate
 	switch c.Log.Format {
 	case "text", "json":
 	default:
 		return fmt.Errorf("unsupported log format %q", c.Log.Format)
 	}
 
+	// channel config validate
+	if strings.TrimSpace(c.Channel.CLISessionKey) == "" {
+		return errors.New("QEMU_AGENT_CLI_SESSION_KEY is empty")
+	}
+	if !strings.HasPrefix(c.Channel.CLISessionKey, "cli:") {
+		return fmt.Errorf("QEMU_AGENT_CLI_SESSION_KEY must start with cli:, got %q", c.Channel.CLISessionKey)
+	}
+	if c.Channel.CLIPrompt == "" {
+		return errors.New("QEMU_AGENT_CLI_PROMPT is empty")
+	}
+	if strings.ContainsRune(c.Channel.CLIPrompt, '\x00') {
+		return errors.New("QEMU_AGENT_CLI_PROMPT contains NUL")
+	}
+	if c.Channel.MaxInputBytes <= 0 || c.Channel.MaxInputBytes > MaxCLIInputBytes {
+		return fmt.Errorf(
+			"QEMU_AGENT_CLI_MAX_INPUT_BYTES must be between 1 and %d",
+			MaxCLIInputBytes,
+		)
+	}
+
+	// path fetch
 	info, err := os.Stat(c.Paths.Workspace)
 	if err != nil {
 		return fmt.Errorf("stat workspace: %w", err)

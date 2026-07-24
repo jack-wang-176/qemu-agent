@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -255,4 +256,56 @@ func (r *Registry) Reset(ctx context.Context, key string) (*Session, error) {
 	item.session = reset
 	item.sessionID = reset.ID
 	return cloneSession(reset), nil
+}
+
+// List returns persisted session metadata ordered by most recent update.
+func (r *Registry) List(ctx context.Context) ([]Meta, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	items, err := r.store.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions: %w", err)
+	}
+	result := append([]Meta(nil), items...)
+	sort.SliceStable(result, func(i, j int) bool {
+		return result[i].UpdatedAt.After(result[j].UpdatedAt)
+	})
+	return result, nil
+}
+
+// Update mutates the current session while holding its entry lock and rolls
+// back the in-memory value if the callback or persistence fails.
+func (r *Registry) Update(ctx context.Context, key string, fn func(*Session) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := validateKey(key); err != nil {
+		return err
+	}
+	if fn == nil {
+		return errors.New("session update callback is nil")
+	}
+	item, ok := r.lookupEntry(key)
+	if !ok {
+		return ErrNoCurrentSession
+	}
+	item.mu.Lock()
+	defer item.mu.Unlock()
+	if item.session == nil {
+		return ErrNoCurrentSession
+	}
+
+	before := cloneSession(item.session)
+	if err := fn(item.session); err != nil {
+		item.session = before
+		item.sessionID = before.ID
+		return err
+	}
+	if err := r.store.Save(ctx, item.session); err != nil {
+		item.session = before
+		item.sessionID = before.ID
+		return fmt.Errorf("save updated session: %w", err)
+	}
+	return nil
 }
