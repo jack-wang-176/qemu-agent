@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/google/uuid"
@@ -49,21 +50,31 @@ func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
+type processIO struct {
+	In  io.Reader
+	Out io.Writer
+	Err io.Writer
+}
+
 /* run initialize certain run behavior*/
 func run(args []string) int {
-	flags, visited, err := parseFlags(args, os.Stderr)
+	return runWithIO(args, processIO{In: os.Stdin, Out: os.Stdout, Err: os.Stderr})
+}
+
+func runWithIO(args []string, streams processIO) int {
+	flags, visited, err := parseFlags(args, streams.Err)
 	if err != nil {
 		return 2
 	}
-	if flags.Prompt == "" {
-		fmt.Fprintln(os.Stderr, "-p prompt is required")
+	if visited["p"] && strings.TrimSpace(flags.Prompt) == "" {
+		fmt.Fprintln(streams.Err, "-p prompt must not be empty")
 		return 2
 	}
 
 	/* load config initializing config behavior/ */
 	cfg, err := config.LoadFromOS(flags.Overrides(visited))
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(streams.Err, err)
 		return 2
 	}
 
@@ -71,10 +82,15 @@ func run(args []string) int {
 	runtime, err := app.Build(app.BuildInput{
 		Config:       cfg,
 		SystemPrompt: systemPrompt,
-		LogOutput:    os.Stderr,
+		LogOutput:    streams.Err,
+		CLI: app.CLIAdapters{
+			Input:     streams.In,
+			Output:    streams.Out,
+			ErrOutput: streams.Err,
+		},
 	})
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(streams.Err, err)
 		return 1
 	}
 	defer runtime.Close()
@@ -86,17 +102,26 @@ func run(args []string) int {
 	)
 	defer stop()
 
-	answer, err := runtime.Application.RunOnce(
-		ctx,
-		newTraceID(),
-		flags.Prompt,
-	)
-	if err != nil {
-		runtime.Logger.Error("run prompt", "err", err)
-		return 1
+	if visited["p"] {
+		answer, err := runtime.Application.RunOnce(
+			ctx,
+			newTraceID(),
+			flags.Prompt,
+		)
+		if err != nil {
+			runtime.Logger.Error("run prompt", "err", err)
+			return 1
+		}
+		if answer != "" {
+			fmt.Fprintln(streams.Out, answer)
+		}
+		return 0
 	}
 
-	fmt.Fprint(os.Stdout, answer)
+	if err := runtime.Run(ctx); err != nil {
+		runtime.Logger.Error("run runtime", "err", err)
+		return 1
+	}
 	return 0
 }
 

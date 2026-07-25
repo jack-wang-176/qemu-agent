@@ -10,6 +10,16 @@ import (
 	"github.com/jack-wang-176/qemu-agent/internal/channel"
 )
 
+type countingCloser struct {
+	calls int
+	err   error
+}
+
+func (c *countingCloser) Close() error {
+	c.calls++
+	return c.err
+}
+
 type fakeChannel struct {
 	name    string
 	err     error
@@ -58,4 +68,21 @@ func TestRuntimeRun(t *testing.T) {
 			t.Fatalf("error = %v", err)
 		}
 	})
+}
+
+func TestRuntimeCloseIsIdempotentAndJoinsErrors(t *testing.T) {
+	first := &countingCloser{err: errors.New("first")}
+	second := &countingCloser{err: errors.New("second")}
+	runtime := &Runtime{}
+	runtime.AddCloser(first)
+	runtime.AddCloser(second)
+
+	firstErr := runtime.Close()
+	secondErr := runtime.Close()
+	if firstErr == nil || secondErr == nil {
+		t.Fatalf("first=%v second=%v", firstErr, secondErr)
+	}
+	if first.calls != 1 || second.calls != 1 {
+		t.Fatalf("close calls first=%d second=%d", first.calls, second.calls)
+	}
 }

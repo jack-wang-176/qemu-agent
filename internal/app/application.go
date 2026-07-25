@@ -6,20 +6,23 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
+	"github.com/jack-wang-176/qemu-agent/internal/agent"
 	"github.com/jack-wang-176/qemu-agent/internal/channel"
 	"github.com/jack-wang-176/qemu-agent/internal/session"
 )
 
 type Runner interface {
-	Run(ctx context.Context, s *session.Session, input string) (string, error)
+	Run(ctx context.Context, s *session.Session, input agent.RunInput) (string, error)
 }
 
 type Application struct {
-	runner   Runner
-	sessions SessionRegistry
-	commands CommandHandler
-	logger   *slog.Logger
+	runner    Runner
+	sessions  SessionRegistry
+	commands  CommandHandler
+	logger    *slog.Logger
+	toolRunMu sync.Mutex
 }
 
 type Dependencies struct {
@@ -110,9 +113,13 @@ func (a *Application) Handle(ctx context.Context, in channel.Inbound) (channel.O
 		}, nil
 	}
 	var answer string
+	// CLI approval shares the channel reader with the REPL. Serialize agent runs
+	// so two sessions cannot concurrently consume approval/input lines.
+	a.toolRunMu.Lock()
+	defer a.toolRunMu.Unlock()
 	//inject session and run
 	err = a.sessions.WithSession(ctx, in.SessionKey, func(sess *session.Session) error {
-		result, err := a.runner.Run(ctx, sess, in.Text)
+		result, err := a.runner.Run(ctx, sess, agent.RunInput{Text: in.Text, SessionKey: in.SessionKey, Channel: in.Channel, Interactive: in.Channel == "cli" && !strings.HasPrefix(in.SessionKey, "oneshot:")})
 		answer = result
 		return err
 	})

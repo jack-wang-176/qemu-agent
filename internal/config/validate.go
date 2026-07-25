@@ -11,6 +11,20 @@ import (
 var ErrNilEnvironmentLookup = errors.New("environment lookup is nil")
 
 func (c Config) Validate() error {
+	switch c.Security.Mode {
+	case "allow", "deny-dangerous", "ask-dangerous":
+	default:
+		return fmt.Errorf("unsupported tool security mode %q", c.Security.Mode)
+	}
+	if strings.TrimSpace(c.Security.AuditPath) == "" {
+		return errors.New("tool audit path is empty")
+	}
+	if c.Security.ApprovalTimeout <= 0 {
+		return errors.New("tool approval timeout must be > 0")
+	}
+	if c.Security.MaxAuditArgBytes <= 0 || c.Security.MaxAuditOutBytes <= 0 {
+		return errors.New("tool audit limits must be > 0")
+	}
 	// context config validate
 	if c.Context.KeepRecentTurns < 0 {
 		return errors.New("QEMU_AGENT_KEEP_RECENT_TURNS must be >= 0")

@@ -150,6 +150,30 @@ func LoadEnv(lookup LookupEnv) (Config, error) {
 		return Config{}, err
 	}
 
+	// tool security config read
+	auditPath := envString(lookup, "QEMU_AGENT_TOOL_AUDIT_PATH", "")
+	if auditPath == "" {
+		auditPath = filepath.Join(dataDir, "audit", "tools.jsonl")
+	} else {
+		absolute, err := filepath.Abs(auditPath)
+		if err != nil {
+			return Config{}, fmt.Errorf("resolve tool audit path: %w", err)
+		}
+		auditPath = filepath.Clean(absolute)
+	}
+	approvalTimeout, err := envDuration(lookup, "QEMU_AGENT_TOOL_APPROVAL_TIMEOUT", DefaultApprovalTimeout)
+	if err != nil {
+		return Config{}, err
+	}
+	maxAuditArgs, err := envInt(lookup, "QEMU_AGENT_TOOL_MAX_AUDIT_ARG_BYTES", DefaultMaxAuditArgBytes)
+	if err != nil {
+		return Config{}, err
+	}
+	maxAuditOutput, err := envInt(lookup, "QEMU_AGENT_TOOL_MAX_AUDIT_OUT_BYTES", DefaultMaxAuditOutBytes)
+	if err != nil {
+		return Config{}, err
+	}
+
 	// general config build
 	cfg := Config{
 		Agent: AgentConfig{
@@ -193,6 +217,13 @@ func LoadEnv(lookup LookupEnv) (Config, error) {
 			CLISessionKey: envString(lookup, "QEMU_AGENT_CLI_SESSION_KEY", DefaultCLISessionKey),
 			CLIPrompt:     envString(lookup, "QEMU_AGENT_CLI_PROMPT", DefaultCLIPrompt),
 			MaxInputBytes: maxInputBytes,
+		},
+		Security: SecurityConfig{
+			Mode:             envString(lookup, "QEMU_AGENT_TOOL_SECURITY_MODE", DefaultSecurityMode),
+			AuditPath:        auditPath,
+			ApprovalTimeout:  approvalTimeout,
+			MaxAuditArgBytes: maxAuditArgs,
+			MaxAuditOutBytes: maxAuditOutput,
 		},
 	}
 
