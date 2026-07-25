@@ -17,6 +17,7 @@ type Config struct {
 	Log       LogConfig
 	Providers ProviderConfig
 	Channel   ChannelConfig
+	Security  SecurityConfig
 }
 
 type AgentConfig struct {
@@ -63,6 +64,14 @@ type ChannelConfig struct {
 	CLISessionKey string
 	CLIPrompt     string
 	MaxInputBytes int
+}
+
+type SecurityConfig struct {
+	Mode             string
+	AuditPath        string
+	ApprovalTimeout  time.Duration
+	MaxAuditArgBytes int
+	MaxAuditOutBytes int
 }
 
 func LoadFromOS(overrides Overrides) (Config, error) {

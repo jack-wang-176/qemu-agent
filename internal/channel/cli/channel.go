@@ -135,8 +135,12 @@ func NewCLI(deps Dependencies, cfg Config) (*CLI, error) {
 		return nil, errors.New("CLI max input bytes must be > 0")
 	}
 
+	reader, ok := deps.Input.(*bufio.Reader)
+	if !ok {
+		reader = bufio.NewReader(deps.Input)
+	}
 	return &CLI{
-		reader:        bufio.NewReader(deps.Input),
+		reader:        reader,
 		output:        deps.Output,
 		errOutput:     deps.ErrOutput,
 		renderer:      deps.Renderer,

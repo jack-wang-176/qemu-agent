@@ -1,10 +1,12 @@
 package app
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
 
+	"github.com/google/uuid"
 	"github.com/jack-wang-176/qemu-agent/internal/agent"
 	"github.com/jack-wang-176/qemu-agent/internal/app/build"
 	"github.com/jack-wang-176/qemu-agent/internal/channel"
@@ -12,6 +14,7 @@ import (
 	"github.com/jack-wang-176/qemu-agent/internal/config"
 	"github.com/jack-wang-176/qemu-agent/internal/obs"
 	"github.com/jack-wang-176/qemu-agent/internal/session"
+	"github.com/jack-wang-176/qemu-agent/internal/tools/security"
 )
 
 type BuildInput struct {
@@ -71,6 +74,37 @@ func Build(input BuildInput) (*Runtime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build tool manager: %w", err)
 	}
+	consoleReader := bufio.NewReader(input.CLI.Input)
+	cliApprover, err := security.NewCLIApprover(consoleReader, input.CLI.ErrOutput)
+	if err != nil {
+		return nil, fmt.Errorf("build CLI approver: %w", err)
+	}
+	bashAnalyzer, err := security.NewConservativeBashAnalyzer(input.Config.Security.Mode)
+	if err != nil {
+		return nil, fmt.Errorf("build bash analyzer: %w", err)
+	}
+	policy, err := security.NewStaticPolicy(input.Config.Security.Mode, bashAnalyzer)
+	if err != nil {
+		return nil, fmt.Errorf("build tool policy: %w", err)
+	}
+	redactor, err := security.NewDefaultRedactor(input.Config.Security.MaxAuditArgBytes, input.Config.Security.MaxAuditOutBytes)
+	if err != nil {
+		return nil, fmt.Errorf("build audit redactor: %w", err)
+	}
+	auditSink, err := security.NewJSONLAuditSink(input.Config.Security.AuditPath)
+	if err != nil {
+		return nil, fmt.Errorf("build tool audit sink: %w", err)
+	}
+	keepAudit := false
+	defer func() {
+		if !keepAudit {
+			_ = auditSink.Close()
+		}
+	}()
+	executor, err := security.NewExecutor(security.ExecutorDependencies{Catalog: manager, Policy: policy, Approver: security.RoutingApprover{Interactive: cliApprover, Fallback: security.DenyAllApprover{}}, Audit: auditSink, Redactor: redactor}, input.Config.Security.ApprovalTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("build secure tool executor: %w", err)
+	}
 
 	contextManager, err := build.BuildContextManager(
 		input.Config.Agent,
@@ -93,10 +127,12 @@ func Build(input BuildInput) (*Runtime, error) {
 	runner, err := agent.New(
 		agent.Dependencies{
 			Provider: provider,
-			Tools:    manager,
+			Catalog:  manager,
+			Executor: executor,
 			Store:    store,
 			Context:  contextManager,
 			Logger:   logger,
+			NewID:    uuid.NewString,
 		},
 		agent.Config{
 			MaxTurns: input.Config.Agent.MaxTurns,
@@ -118,7 +154,7 @@ func Build(input BuildInput) (*Runtime, error) {
 	}
 
 	cliChannel, err := cli.NewCLI(cli.Dependencies{
-		Input:     input.CLI.Input,
+		Input:     consoleReader,
 		Output:    input.CLI.Output,
 		ErrOutput: input.CLI.ErrOutput,
 		Renderer:  cli.NewTextRenderer(),
@@ -133,9 +169,12 @@ func Build(input BuildInput) (*Runtime, error) {
 	}
 
 	logger.Info("application built", "config", input.Config.Summary())
-	return &Runtime{
+	runtime := &Runtime{
 		Application: application,
 		Logger:      logger,
 		Channels:    []channel.Channel{cliChannel},
-	}, nil
+	}
+	runtime.AddCloser(auditSink)
+	keepAudit = true
+	return runtime, nil
 }
