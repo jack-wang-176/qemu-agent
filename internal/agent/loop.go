@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/jack-wang-176/qemu-agent/internal/contextmgr"
 	"github.com/jack-wang-176/qemu-agent/internal/llm"
 	"github.com/jack-wang-176/qemu-agent/internal/session"
 	"github.com/jack-wang-176/qemu-agent/internal/tools/security"
@@ -19,8 +20,13 @@ func (a *Agent) Run(ctx context.Context, s *session.Session, input RunInput) (st
 	if s == nil {
 		return "", errors.New("session is nil")
 	}
-	if strings.TrimSpace(s.Model) == "" {
-		return "", errors.New("session model is empty")
+	resolved, err := a.models.Resolve(s.ModelRef)
+	if err != nil {
+		return "", fmt.Errorf("resolve session model %q: %w", s.ModelRef.String(), err)
+	}
+	definition, provider := resolved.Definition, resolved.Provider
+	if a.stream && !definition.Streaming {
+		return "", fmt.Errorf("model %q does not support streaming", definition.Ref.String())
 	}
 	if strings.TrimSpace(input.Text) == "" {
 		return "", errors.New("input is empty")
@@ -32,7 +38,7 @@ func (a *Agent) Run(ctx context.Context, s *session.Session, input RunInput) (st
 	s.AddUser(input.Text)
 	for turn := 1; turn <= a.maxTurns; turn++ {
 		original := s.MessageCopy()
-		trimmed, used, err := a.ctxmgr.EnforceBudget(ctx, s.Model, original)
+		trimmed, used, err := a.ctxmgr.EnforceBudget(ctx, contextmgr.ModelBudget{Ref: definition.Ref, MaxContext: definition.MaxContext}, original)
 		if err != nil {
 			a.logger.WarnContext(ctx, "enforce context budget", "err", err)
 		} else {
@@ -40,8 +46,12 @@ func (a *Agent) Run(ctx context.Context, s *session.Session, input RunInput) (st
 			s.MessageReplace(trimmed, used)
 		}
 		/* call model.*/
-		response, err := a.provider.Complete(ctx, llm.Request{
-			Model: s.Model, Messages: s.MessageCopy(), Tools: a.catalog.Schemas(),
+		tools := a.catalog.Schemas()
+		if len(tools) > 0 && !definition.Tools {
+			return "", fmt.Errorf("model %q does not support tools", definition.Ref.String())
+		}
+		response, err := provider.Complete(ctx, llm.Request{
+			Model: definition.Ref.Model, Messages: s.MessageCopy(), Tools: tools, MaxTokens: definition.MaxOutput,
 		})
 		if err != nil {
 			return "", fmt.Errorf("turn %d provider: %w", turn, err)

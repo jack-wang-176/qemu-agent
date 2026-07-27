@@ -16,6 +16,7 @@ type Config struct {
 	Tools     ToolConfig
 	Log       LogConfig
 	Providers ProviderConfig
+	Models    ModelConfig
 	Channel   ChannelConfig
 	Security  SecurityConfig
 }
@@ -72,6 +73,22 @@ type SecurityConfig struct {
 	ApprovalTimeout  time.Duration
 	MaxAuditArgBytes int
 	MaxAuditOutBytes int
+}
+
+type ModelConfig struct {
+	Definitions            []ModelDefinitionConfig
+	CompatibilityGenerated bool
+}
+
+type ModelDefinitionConfig struct {
+	Provider    string   `json:"provider"`
+	Name        string   `json:"name"`
+	DisplayName string   `json:"display_name"`
+	Aliases     []string `json:"aliases"`
+	MaxContext  int      `json:"max_context"`
+	MaxOutput   int      `json:"max_output"`
+	Tools       bool     `json:"tools"`
+	Streaming   bool     `json:"streaming"`
 }
 
 func LoadFromOS(overrides Overrides) (Config, error) {

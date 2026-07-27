@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/jack-wang-176/qemu-agent/internal/contextmgr"
 	"github.com/jack-wang-176/qemu-agent/internal/llm"
 	"github.com/jack-wang-176/qemu-agent/internal/session"
 	"github.com/jack-wang-176/qemu-agent/internal/tools/security"
@@ -26,12 +27,12 @@ type SecureToolExecutor interface {
 }
 
 type ContextManager interface {
-	EnforceBudget(ctx context.Context, model string, msgs []llm.Message) ([]llm.Message, int, error)
+	EnforceBudget(ctx context.Context, budget contextmgr.ModelBudget, msgs []llm.Message) ([]llm.Message, int, error)
 }
 
 // Dependencies contains runtime capabilities required by Agent.
 type Dependencies struct {
-	Provider llm.Provider
+	Models   llm.ModelResolver
 	Catalog  ToolCatalog
 	Executor SecureToolExecutor
 	Store    session.Store
@@ -42,7 +43,7 @@ type Dependencies struct {
 }
 
 type Agent struct {
-	provider llm.Provider
+	models   llm.ModelResolver
 	catalog  ToolCatalog
 	executor SecureToolExecutor
 	ctxmgr   ContextManager
@@ -55,8 +56,8 @@ type Agent struct {
 }
 
 func New(deps Dependencies, cfg Config) (*Agent, error) {
-	if deps.Provider == nil {
-		return nil, errors.New("provider is nil")
+	if deps.Models == nil {
+		return nil, errors.New("model resolver is nil")
 	}
 	if deps.Catalog == nil {
 		return nil, errors.New("tool catalog is nil")
@@ -76,9 +77,6 @@ func New(deps Dependencies, cfg Config) (*Agent, error) {
 	if cfg.MaxTurns <= 0 {
 		return nil, errors.New("max turns must be positive")
 	}
-	if cfg.Stream && !deps.Provider.Capability().Streaming {
-		return nil, errors.New("configured provider does not support streaming")
-	}
 	if deps.NewID == nil {
 		return nil, errors.New("invocation id generator is nil")
 	}
@@ -87,7 +85,7 @@ func New(deps Dependencies, cfg Config) (*Agent, error) {
 	}
 
 	return &Agent{
-		provider: deps.Provider,
+		models:   deps.Models,
 		catalog:  deps.Catalog,
 		executor: deps.Executor,
 		store:    deps.Store,

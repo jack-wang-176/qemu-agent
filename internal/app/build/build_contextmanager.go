@@ -9,21 +9,20 @@ import (
 )
 
 func BuildContextManager(
-	agentConfig config.AgentConfig,
 	contextConfig config.ContextConfig,
-	provider llm.Provider,
+	summaryModel llm.ResolvedModel,
 ) (*contextmgr.CompactorManager, error) {
 	tokenizer, err := contextmgr.NewTokenizer(
-		agentConfig.Model,
+		summaryModel.Definition.Ref.Model,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("build tokenizer: %w", err)
 	}
 
 	summarizer := contextmgr.NewLLMSummarizer(
-		provider,
+		summaryModel.Provider,
 		contextConfig.KeepRecentTurns,
-		agentConfig.Model,
+		summaryModel.Definition.Ref.Model,
 	)
 	manager := contextmgr.NewCompactorManager(
 		contextConfig.MaxTokens,

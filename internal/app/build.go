@@ -12,6 +12,7 @@ import (
 	"github.com/jack-wang-176/qemu-agent/internal/channel"
 	"github.com/jack-wang-176/qemu-agent/internal/channel/cli"
 	"github.com/jack-wang-176/qemu-agent/internal/config"
+	"github.com/jack-wang-176/qemu-agent/internal/llm"
 	"github.com/jack-wang-176/qemu-agent/internal/obs"
 	"github.com/jack-wang-176/qemu-agent/internal/session"
 	"github.com/jack-wang-176/qemu-agent/internal/tools/security"
@@ -59,13 +60,16 @@ func Build(input BuildInput) (*Runtime, error) {
 		return nil, fmt.Errorf("build logger: %w", err)
 	}
 
-	provider, err := build.BuildProvider(input.Config)
+	models, defaultRef, err := build.BuildModelRegistry(input.Config, llm.NewConfigProviderFactory(input.Config.Providers))
 	if err != nil {
-		return nil, fmt.Errorf("build provider: %w", err)
+		return nil, fmt.Errorf("build model registry: %w", err)
 	}
-
+	resolvedDefault, err := models.Resolve(defaultRef)
+	if err != nil {
+		return nil, fmt.Errorf("resolve default model: %w", err)
+	}
 	store := session.NewFileStore(input.Config.Paths.SessionDir)
-	registry, err := build.BuildSessionRegistry(input.Config.Agent, store, input.SystemPrompt)
+	registry, err := build.BuildSessionRegistry(defaultRef, models, store, input.SystemPrompt)
 	if err != nil {
 		return nil, fmt.Errorf("build session registry: %w", err)
 	}
@@ -107,9 +111,8 @@ func Build(input BuildInput) (*Runtime, error) {
 	}
 
 	contextManager, err := build.BuildContextManager(
-		input.Config.Agent,
 		input.Config.Context,
-		provider,
+		resolvedDefault,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("build context manager: %w", err)
@@ -119,6 +122,7 @@ func Build(input BuildInput) (*Runtime, error) {
 		Sessions: registry,
 		Updater:  registry,
 		Context:  contextManager,
+		Models:   models,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("build command router: %w", err)
@@ -126,7 +130,7 @@ func Build(input BuildInput) (*Runtime, error) {
 
 	runner, err := agent.New(
 		agent.Dependencies{
-			Provider: provider,
+			Models:   models,
 			Catalog:  manager,
 			Executor: executor,
 			Store:    store,

@@ -33,6 +33,7 @@ func validBuildConfig(t *testing.T) config.Config {
 	t.Helper()
 	return config.Config{
 		Agent:     config.AgentConfig{Provider: "ollama", Model: "model", MaxTurns: 1},
+		Models:    config.ModelConfig{Definitions: []config.ModelDefinitionConfig{{Provider: "ollama", Name: "model", MaxContext: 4096, Tools: true}}},
 		Context:   config.ContextConfig{MaxTokens: 1024},
 		Paths:     config.PathConfig{DataDir: t.TempDir(), SessionDir: t.TempDir(), Workspace: t.TempDir()},
 		Tools:     config.ToolConfig{Timeout: 1, MaxOutputBytes: 1, ReadMaxLines: 1},

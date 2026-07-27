@@ -8,12 +8,14 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/jack-wang-176/qemu-agent/internal/llm"
 )
 
 type Meta struct {
 	ID        string
 	TraceID   string
-	Model     string
+	ModelRef  llm.ModelRef
 	UpdatedAt time.Time
 }
 
@@ -60,7 +62,7 @@ func (f *FileStore) List(ctx context.Context) ([]Meta, error) {
 		if err != nil {
 			continue
 		}
-		result = append(result, Meta{ID: s.ID, TraceID: s.TraceID, Model: s.Model, UpdatedAt: s.UpdatedAt})
+		result = append(result, Meta{ID: s.ID, TraceID: s.TraceID, ModelRef: s.ModelRef, UpdatedAt: s.UpdatedAt})
 	}
 	return result, nil
 }
