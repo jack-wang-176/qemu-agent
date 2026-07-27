@@ -12,6 +12,7 @@ type Summary struct {
 	LogFormat     string
 	MaxInputBytes int
 	CLISessionKey string
+	ModelCount    int
 }
 
 func (c Config) Summary() Summary {
@@ -26,5 +27,6 @@ func (c Config) Summary() Summary {
 		LogFormat:     c.Log.Format,
 		MaxInputBytes: c.Channel.MaxInputBytes,
 		CLISessionKey: c.Channel.CLISessionKey,
+		ModelCount:    len(c.Models.Definitions),
 	}
 }

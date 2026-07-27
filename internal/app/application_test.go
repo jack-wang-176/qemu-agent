@@ -12,6 +12,7 @@ import (
 
 	"github.com/jack-wang-176/qemu-agent/internal/agent"
 	"github.com/jack-wang-176/qemu-agent/internal/channel"
+	"github.com/jack-wang-176/qemu-agent/internal/contextmgr"
 	"github.com/jack-wang-176/qemu-agent/internal/llm"
 	"github.com/jack-wang-176/qemu-agent/internal/session"
 )
@@ -54,7 +55,7 @@ func (s *memoryStore) List(context.Context) ([]session.Meta, error) {
 	defer s.mu.Unlock()
 	result := make([]session.Meta, 0, len(s.sessions))
 	for _, sess := range s.sessions {
-		result = append(result, session.Meta{ID: sess.ID, TraceID: sess.TraceID, Model: sess.Model, UpdatedAt: sess.UpdatedAt})
+		result = append(result, session.Meta{ID: sess.ID, TraceID: sess.TraceID, ModelRef: sess.ModelRef, UpdatedAt: sess.UpdatedAt})
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	return result, nil
@@ -66,7 +67,7 @@ type testContextManager struct {
 	err      error
 }
 
-func (m testContextManager) EnforceBudget(_ context.Context, _ string, messages []llm.Message) ([]llm.Message, int, error) {
+func (m testContextManager) EnforceBudget(_ context.Context, _ contextmgr.ModelBudget, messages []llm.Message) ([]llm.Message, int, error) {
 	if m.err != nil {
 		return nil, 0, m.err
 	}
@@ -80,11 +81,11 @@ func newTestApplication(t *testing.T) (*Application, *recordingRunner, *session.
 	t.Helper()
 	runner := &recordingRunner{}
 	store := &memoryStore{sessions: make(map[string]*session.Session)}
-	factory, err := session.NewDefaultFactory(session.Defaults{Model: "test-model", SystemPrompt: "system"}, func() string { return "generated-trace" })
+	factory, err := session.NewDefaultFactory(session.Defaults{ModelRef: llm.ModelRef{Provider: "ollama", Model: "test-model"}, SystemPrompt: "system"}, func() string { return "generated-trace" })
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry, err := session.NewRegistry(store, factory)
+	registry, err := session.NewRegistry(store, factory, newTestModels(t), "ollama")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,6 +93,7 @@ func newTestApplication(t *testing.T) (*Application, *recordingRunner, *session.
 		Sessions: registry,
 		Updater:  registry,
 		Context:  testContextManager{},
+		Models:   newTestModels(t),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -133,7 +135,7 @@ func TestRunOnceUsesRegistrySessionWithConfiguredDefaults(t *testing.T) {
 	}
 	runSession := runner.sessions[0]
 	runner.mu.Unlock()
-	if runSession.Model != "test-model" || runSession.TraceID != "trace-1" {
+	if runSession.ModelRef.Model != "test-model" || runSession.TraceID != "trace-1" {
 		t.Fatalf("session = %#v", runSession)
 	}
 	current, err := registry.Current(context.Background(), "oneshot:trace-1")

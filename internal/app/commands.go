@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jack-wang-176/qemu-agent/internal/channel"
+	"github.com/jack-wang-176/qemu-agent/internal/contextmgr"
 	"github.com/jack-wang-176/qemu-agent/internal/llm"
 	"github.com/jack-wang-176/qemu-agent/internal/session"
 )
@@ -68,13 +69,20 @@ type SessionUpdater interface {
 }
 
 type ContextCommands interface {
-	EnforceBudget(context.Context, string, []llm.Message) ([]llm.Message, int, error)
+	EnforceBudget(context.Context, contextmgr.ModelBudget, []llm.Message) ([]llm.Message, int, error)
+}
+
+type ModelCommands interface {
+	Resolve(llm.ModelRef) (llm.ResolvedModel, error)
+	ResolveName(string) (llm.ResolvedModel, error)
+	List() []llm.ModelDefinition
 }
 
 type CommandDependencies struct {
 	Sessions SessionCommands
 	Updater  SessionUpdater
 	Context  ContextCommands
+	Models   ModelCommands
 }
 
 type CommandResult struct {
@@ -86,6 +94,7 @@ type CommandRouter struct {
 	sessions SessionCommands
 	updater  SessionUpdater
 	context  ContextCommands
+	models   ModelCommands
 }
 
 func NewCommandRouter(deps CommandDependencies) (*CommandRouter, error) {
@@ -98,10 +107,14 @@ func NewCommandRouter(deps CommandDependencies) (*CommandRouter, error) {
 	if deps.Context == nil {
 		return nil, errors.New("command router context is nil")
 	}
+	if deps.Models == nil {
+		return nil, errors.New("command router models is nil")
+	}
 	return &CommandRouter{
 		sessions: deps.Sessions,
 		updater:  deps.Updater,
 		context:  deps.Context,
+		models:   deps.Models,
 	}, nil
 }
 
@@ -123,6 +136,7 @@ func (r *CommandRouter) Execute(ctx context.Context, sessionKey string, command 
 				"/resume <session-id>",
 				"/history",
 				"/compact",
+				"/model [list|<alias|provider:model>]",
 				"/exit",
 			}, "\n"),
 			Action: channel.ActionReply,
@@ -162,6 +176,8 @@ func (r *CommandRouter) Execute(ctx context.Context, sessionKey string, command 
 		return r.history(ctx, sessionKey)
 	case "compact":
 		return r.compact(ctx, sessionKey, command.Args)
+	case "model":
+		return r.model(ctx, sessionKey, command.Args)
 	case "exit":
 		if err := requireArgCount(command, 0, "/exit"); err != nil {
 			return CommandResult{}, err
@@ -196,7 +212,7 @@ func (r *CommandRouter) listSessions(ctx context.Context) (CommandResult, error)
 		lines = append(lines, fmt.Sprintf(
 			"%s  model=%s  updated=%s",
 			item.ID,
-			item.Model,
+			item.ModelRef.String(),
 			item.UpdatedAt.Format(time.RFC3339),
 		))
 	}
@@ -210,6 +226,9 @@ func (r *CommandRouter) resumeSession(ctx context.Context, key string, args []st
 	resumed, err := r.sessions.Resume(ctx, key, args[0])
 	if errors.Is(err, fs.ErrNotExist) {
 		return CommandResult{}, userErrorf("session %q does not exist", args[0])
+	}
+	if errors.Is(err, llm.ErrModelNotFound) {
+		return CommandResult{}, userErrorf("session %q uses an unregistered model; restore its model configuration before resuming", args[0])
 	}
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("resume session %q: %w", args[0], err)
@@ -252,7 +271,11 @@ func (r *CommandRouter) compact(ctx context.Context, key string, args []string) 
 	var before, after int
 	err := r.updater.Update(ctx, key, func(sess *session.Session) error {
 		before = len(sess.Messages)
-		messages, usage, err := r.context.EnforceBudget(ctx, sess.Model, sess.MessageCopy())
+		resolved, err := r.models.Resolve(sess.ModelRef)
+		if err != nil {
+			return fmt.Errorf("resolve compact model: %w", err)
+		}
+		messages, usage, err := r.context.EnforceBudget(ctx, contextmgr.ModelBudget{Ref: resolved.Definition.Ref, MaxContext: resolved.Definition.MaxContext}, sess.MessageCopy())
 		if err != nil {
 			return fmt.Errorf("compact session context: %w", err)
 		}
@@ -267,4 +290,46 @@ func (r *CommandRouter) compact(ctx context.Context, key string, args []string) 
 		return CommandResult{}, err
 	}
 	return reply(fmt.Sprintf("compacted messages: %d -> %d", before, after)), nil
+}
+
+func (r *CommandRouter) model(ctx context.Context, key string, args []string) (CommandResult, error) {
+	if len(args) > 1 {
+		return CommandResult{}, userErrorf("usage: /model [list|<alias|provider:model>]")
+	}
+	if len(args) == 0 {
+		current, err := r.sessions.Current(ctx, key)
+		if errors.Is(err, session.ErrNoCurrentSession) {
+			return CommandResult{}, userErrorf("no current session")
+		}
+		if err != nil {
+			return CommandResult{}, fmt.Errorf("get current session: %w", err)
+		}
+		return reply("current model: " + current.ModelRef.String()), nil
+	}
+	if strings.EqualFold(args[0], "list") {
+		definitions := r.models.List()
+		lines := make([]string, 0, len(definitions))
+		for _, def := range definitions {
+			alias := "-"
+			if len(def.Aliases) > 0 {
+				alias = strings.Join(def.Aliases, ",")
+			}
+			lines = append(lines, fmt.Sprintf("%-12s %s context=%d tools=%t stream=%t", alias, def.Ref.String(), def.MaxContext, def.Tools, def.Streaming))
+		}
+		return reply(strings.Join(lines, "\n")), nil
+	}
+	resolved, err := r.models.ResolveName(args[0])
+	if errors.Is(err, llm.ErrModelNotFound) {
+		return CommandResult{}, userErrorf("model %q is not registered; use /model list", args[0])
+	}
+	if err != nil {
+		return CommandResult{}, userErrorf("invalid model %q: %v", args[0], err)
+	}
+	if err := r.updater.Update(ctx, key, func(sess *session.Session) error { sess.ModelRef = resolved.Definition.Ref; return nil }); err != nil {
+		if errors.Is(err, session.ErrNoCurrentSession) {
+			return CommandResult{}, userErrorf("no current session")
+		}
+		return CommandResult{}, fmt.Errorf("switch model: %w", err)
+	}
+	return reply(fmt.Sprintf("model switched to %s; existing history was preserved", resolved.Definition.Ref.String())), nil
 }

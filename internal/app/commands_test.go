@@ -14,18 +14,19 @@ import (
 func newTestRouter(t *testing.T, contextManager ContextCommands) (*CommandRouter, *session.Registry) {
 	t.Helper()
 	store := &memoryStore{sessions: make(map[string]*session.Session)}
-	factory, err := session.NewDefaultFactory(session.Defaults{Model: "test-model", SystemPrompt: "system"}, func() string { return "trace" })
+	factory, err := session.NewDefaultFactory(session.Defaults{ModelRef: llm.ModelRef{Provider: "ollama", Model: "test-model"}, SystemPrompt: "system"}, func() string { return "trace" })
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry, err := session.NewRegistry(store, factory)
+	models := newTestModels(t)
+	registry, err := session.NewRegistry(store, factory, models, "ollama")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if contextManager == nil {
 		contextManager = testContextManager{}
 	}
-	router, err := NewCommandRouter(CommandDependencies{Sessions: registry, Updater: registry, Context: contextManager})
+	router, err := NewCommandRouter(CommandDependencies{Sessions: registry, Updater: registry, Context: contextManager, Models: models})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,9 +60,10 @@ func TestNewCommandRouterRejectsNilDependencies(t *testing.T) {
 	_ = router
 	ctx := testContextManager{}
 	tests := []CommandDependencies{
-		{Updater: registry, Context: ctx},
-		{Sessions: registry, Context: ctx},
-		{Sessions: registry, Updater: registry},
+		{Updater: registry, Context: ctx, Models: newTestModels(t)},
+		{Sessions: registry, Context: ctx, Models: newTestModels(t)},
+		{Sessions: registry, Updater: registry, Models: newTestModels(t)},
+		{Sessions: registry, Updater: registry, Context: ctx},
 	}
 	for _, deps := range tests {
 		if _, err := NewCommandRouter(deps); err == nil {
@@ -179,5 +181,40 @@ func TestCommandRouterCompactFailurePreservesSession(t *testing.T) {
 	after, _ := registry.Current(ctx, key)
 	if after.ID != before.ID || len(after.Messages) != len(before.Messages) {
 		t.Fatalf("before = %#v, after = %#v", before, after)
+	}
+}
+
+func TestCommandRouterModelCurrentListAndSelect(t *testing.T) {
+	router, registry := newTestRouter(t, nil)
+	ctx := context.Background()
+	if _, err := registry.New(ctx, "cli:default"); err != nil {
+		t.Fatal(err)
+	}
+	current, err := router.Execute(ctx, "cli:default", parseForTest(t, "/model"))
+	if err != nil || !strings.Contains(current.Text, "ollama:test-model") {
+		t.Fatalf("current = %#v, %v", current, err)
+	}
+	list, err := router.Execute(ctx, "cli:default", parseForTest(t, "/model list"))
+	if err != nil || !strings.Contains(list.Text, "test-model") {
+		t.Fatalf("list = %#v, %v", list, err)
+	}
+	selected, err := router.Execute(ctx, "cli:default", parseForTest(t, "/model model"))
+	if err != nil || !strings.Contains(selected.Text, "ollama:model") {
+		t.Fatalf("selected = %#v, %v", selected, err)
+	}
+	after, _ := registry.Current(ctx, "cli:default")
+	if after.ModelRef.String() != "ollama:model" {
+		t.Fatalf("ModelRef = %s", after.ModelRef.String())
+	}
+}
+
+func TestCommandRouterUnknownModelIsRecoverable(t *testing.T) {
+	router, registry := newTestRouter(t, nil)
+	if _, err := registry.New(context.Background(), "cli:default"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := router.Execute(context.Background(), "cli:default", parseForTest(t, "/model missing"))
+	if err == nil || !channel.IsRecoverable(err) {
+		t.Fatalf("error = %v", err)
 	}
 }

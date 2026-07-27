@@ -19,6 +19,11 @@ func (c Config) WithOverrides(overrides Overrides) (Config, error) {
 	if overrides.Model != nil {
 		result.Agent.Model = strings.TrimSpace(*overrides.Model)
 	}
+	if result.Models.CompatibilityGenerated && len(result.Models.Definitions) == 1 {
+		result.Models.Definitions[0].Provider = result.Agent.Provider
+		result.Models.Definitions[0].Name = result.Agent.Model
+		result.Models.Definitions[0].DisplayName = result.Agent.Provider + ":" + result.Agent.Model
+	}
 	if overrides.MaxTurns != nil {
 		result.Agent.MaxTurns = *overrides.MaxTurns
 	}

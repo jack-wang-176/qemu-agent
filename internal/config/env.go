@@ -1,13 +1,43 @@
 package config
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 )
+
+func loadModelDefinitions(lookup LookupEnv, provider, model string, maxContext int, stream bool) ([]ModelDefinitionConfig, error) {
+	raw, ok := lookup("QEMU_AGENT_MODELS_JSON")
+	if ok && strings.TrimSpace(raw) != "" {
+		var definitions []ModelDefinitionConfig
+		decoder := json.NewDecoder(strings.NewReader(raw))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&definitions); err != nil {
+			return nil, fmt.Errorf("parse QEMU_AGENT_MODELS_JSON: %w", err)
+		}
+		var trailing any
+		if err := decoder.Decode(&trailing); err == nil {
+			return nil, fmt.Errorf("parse QEMU_AGENT_MODELS_JSON: extra JSON values")
+		} else if !errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf("parse trailing QEMU_AGENT_MODELS_JSON: %w", err)
+		}
+		return definitions, nil
+	}
+	return []ModelDefinitionConfig{{
+		Provider:    provider,
+		Name:        model,
+		DisplayName: provider + ":" + model,
+		MaxContext:  maxContext,
+		Tools:       true,
+		Streaming:   stream,
+	}}, nil
+}
 
 /* below function parse env into project*/
 func envString(lookup LookupEnv, key, fallback string) string {
@@ -174,10 +204,15 @@ func LoadEnv(lookup LookupEnv) (Config, error) {
 		return Config{}, err
 	}
 
+	provider := envString(lookup, "QEMU_AGENT_PROVIDER", DefaultProvider)
+	definitions, err := loadModelDefinitions(lookup, provider, model, maxContext, stream)
+	if err != nil {
+		return Config{}, err
+	}
 	// general config build
 	cfg := Config{
 		Agent: AgentConfig{
-			Provider: envString(lookup, "QEMU_AGENT_PROVIDER", DefaultProvider),
+			Provider: provider,
 			Model:    model,
 			MaxTurns: maxTurns,
 			Stream:   stream,
@@ -213,6 +248,7 @@ func LoadEnv(lookup LookupEnv) (Config, error) {
 				BaseURL: envString(lookup, "OLLAMA_BASE_URL", DefaultOllamaBaseURL),
 			},
 		},
+		Models: ModelConfig{Definitions: definitions, CompatibilityGenerated: func() bool { raw, ok := lookup("QEMU_AGENT_MODELS_JSON"); return !ok || strings.TrimSpace(raw) == "" }()},
 		Channel: ChannelConfig{
 			CLISessionKey: envString(lookup, "QEMU_AGENT_CLI_SESSION_KEY", DefaultCLISessionKey),
 			CLIPrompt:     envString(lookup, "QEMU_AGENT_CLI_PROMPT", DefaultCLIPrompt),
