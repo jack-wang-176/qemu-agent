@@ -14,19 +14,29 @@ import (
 	"github.com/jack-wang-176/qemu-agent/internal/channel"
 	"github.com/jack-wang-176/qemu-agent/internal/contextmgr"
 	"github.com/jack-wang-176/qemu-agent/internal/llm"
+	"github.com/jack-wang-176/qemu-agent/internal/runstream"
 	"github.com/jack-wang-176/qemu-agent/internal/session"
 )
 
 type recordingRunner struct {
 	mu       sync.Mutex
 	sessions []*session.Session
+	inputs   []agent.RunInput
 }
 
-func (r *recordingRunner) Run(_ context.Context, sess *session.Session, _ agent.RunInput) (string, error) {
+func (r *recordingRunner) Run(_ context.Context, sess *session.Session, input agent.RunInput) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sessions = append(r.sessions, sess)
+	r.inputs = append(r.inputs, input)
 	return "ok", nil
+}
+
+type appTestSink struct{ events []runstream.Event }
+
+func (s *appTestSink) Emit(_ context.Context, event runstream.Event) error {
+	s.events = append(s.events, event)
+	return nil
 }
 
 type memoryStore struct {
@@ -150,9 +160,9 @@ func TestRunOnceUsesRegistrySessionWithConfiguredDefaults(t *testing.T) {
 func TestHandleReusesSessionForSameKey(t *testing.T) {
 	application, runner, _ := newTestApplication(t)
 	for _, input := range []string{"first", "second"} {
-		out, err := application.Handle(context.Background(), channel.Inbound{
+		out, err := application.Handle(context.Background(), channel.Request{Inbound: channel.Inbound{
 			Channel: "cli", SessionKey: "cli:default", Text: input,
-		})
+		}})
 		if err != nil {
 			t.Fatalf("Handle(%q) error = %v", input, err)
 		}
@@ -167,6 +177,23 @@ func TestHandleReusesSessionForSameKey(t *testing.T) {
 	}
 }
 
+func TestHandlePassesRequestEventSinkToRunner(t *testing.T) {
+	application, runner, _ := newTestApplication(t)
+	sink := &appTestSink{}
+	_, err := application.Handle(context.Background(), channel.Request{
+		Inbound: channel.Inbound{Channel: "cli", SessionKey: "cli:default", Text: "hello"},
+		Events:  sink,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	if len(runner.inputs) != 1 || runner.inputs[0].Events != sink {
+		t.Fatalf("inputs=%#v", runner.inputs)
+	}
+}
+
 func TestHandleRejectsInvalidInbound(t *testing.T) {
 	application, _, _ := newTestApplication(t)
 	tests := []channel.Inbound{
@@ -175,7 +202,7 @@ func TestHandleRejectsInvalidInbound(t *testing.T) {
 		{Channel: "cli", SessionKey: "cli:default", Text: "   "},
 	}
 	for _, input := range tests {
-		if _, err := application.Handle(context.Background(), input); err == nil {
+		if _, err := application.Handle(context.Background(), channel.Request{Inbound: input}); err == nil {
 			t.Fatalf("Handle(%#v) error = nil", input)
 		}
 	}
@@ -183,9 +210,9 @@ func TestHandleRejectsInvalidInbound(t *testing.T) {
 
 func TestHandleRoutesCommandWithoutCallingRunner(t *testing.T) {
 	application, runner, _ := newTestApplication(t)
-	out, err := application.Handle(context.Background(), channel.Inbound{
+	out, err := application.Handle(context.Background(), channel.Request{Inbound: channel.Inbound{
 		Channel: "cli", SessionKey: "cli:default", Text: "/help",
-	})
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,9 +228,9 @@ func TestHandleRoutesCommandWithoutCallingRunner(t *testing.T) {
 
 func TestHandleReturnsRecoverableCommandError(t *testing.T) {
 	application, _, _ := newTestApplication(t)
-	_, err := application.Handle(context.Background(), channel.Inbound{
+	_, err := application.Handle(context.Background(), channel.Request{Inbound: channel.Inbound{
 		Channel: "cli", SessionKey: "cli:default", Text: "/unknown",
-	})
+	}})
 	if err == nil || !channel.IsRecoverable(err) {
 		t.Fatalf("error = %v", err)
 	}
@@ -211,9 +238,9 @@ func TestHandleReturnsRecoverableCommandError(t *testing.T) {
 
 func TestHandleExitCommand(t *testing.T) {
 	application, _, _ := newTestApplication(t)
-	out, err := application.Handle(context.Background(), channel.Inbound{
+	out, err := application.Handle(context.Background(), channel.Request{Inbound: channel.Inbound{
 		Channel: "cli", SessionKey: "cli:default", Text: "/exit",
-	})
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}

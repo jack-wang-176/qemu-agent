@@ -3,7 +3,14 @@ package channel
 import (
 	"context"
 	"errors"
+
+	"github.com/jack-wang-176/qemu-agent/internal/runstream"
 )
+
+type Request struct {
+	Inbound Inbound
+	Events  runstream.EventSink
+}
 
 // Inbound is a channel-neutral request passed to the application layer.
 type Inbound struct {
@@ -30,7 +37,7 @@ type Outbound struct {
 
 // Handler processes one inbound channel request.
 type Handler interface {
-	Handle(ctx context.Context, in Inbound) (Outbound, error)
+	Handle(context.Context, Request) (Outbound, error)
 }
 
 // Channel adapts an external transport to the application Handler.

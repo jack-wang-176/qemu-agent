@@ -10,12 +10,13 @@ import (
 	"testing"
 
 	"github.com/jack-wang-176/qemu-agent/internal/channel"
+	"github.com/jack-wang-176/qemu-agent/internal/runstream"
 )
 
-type handlerFunc func(context.Context, channel.Inbound) (channel.Outbound, error)
+type handlerFunc func(context.Context, channel.Request) (channel.Outbound, error)
 
-func (fn handlerFunc) Handle(ctx context.Context, in channel.Inbound) (channel.Outbound, error) {
-	return fn(ctx, in)
+func (fn handlerFunc) Handle(ctx context.Context, request channel.Request) (channel.Outbound, error) {
+	return fn(ctx, request)
 }
 
 type recoverableTestError struct{ message string }
@@ -31,6 +32,7 @@ func newTestCLI(t *testing.T, input string, maxInputBytes int) (*CLI, *bytes.Buf
 		Output:    &output,
 		ErrOutput: &errOutput,
 		Renderer:  NewTextRenderer(),
+		Events:    NewTextRenderer(),
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}, Config{Prompt: "> ", SessionKey: "cli:default", MaxInputBytes: maxInputBytes})
 	if err != nil {
@@ -82,7 +84,7 @@ func TestNewCLIRejectsInvalidDependenciesAndConfig(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	validDeps := Dependencies{
 		Input: strings.NewReader(""), Output: io.Discard, ErrOutput: io.Discard,
-		Renderer: NewTextRenderer(), Logger: logger,
+		Renderer: NewTextRenderer(), Events: NewTextRenderer(), Logger: logger,
 	}
 	validConfig := Config{Prompt: "> ", SessionKey: "cli:default", MaxInputBytes: 1}
 	tests := []struct {
@@ -90,11 +92,12 @@ func TestNewCLIRejectsInvalidDependenciesAndConfig(t *testing.T) {
 		deps Dependencies
 		cfg  Config
 	}{
-		{name: "nil input", deps: Dependencies{Output: io.Discard, ErrOutput: io.Discard, Renderer: NewTextRenderer(), Logger: logger}, cfg: validConfig},
-		{name: "nil output", deps: Dependencies{Input: strings.NewReader(""), ErrOutput: io.Discard, Renderer: NewTextRenderer(), Logger: logger}, cfg: validConfig},
-		{name: "nil error output", deps: Dependencies{Input: strings.NewReader(""), Output: io.Discard, Renderer: NewTextRenderer(), Logger: logger}, cfg: validConfig},
-		{name: "nil renderer", deps: Dependencies{Input: strings.NewReader(""), Output: io.Discard, ErrOutput: io.Discard, Logger: logger}, cfg: validConfig},
-		{name: "nil logger", deps: Dependencies{Input: strings.NewReader(""), Output: io.Discard, ErrOutput: io.Discard, Renderer: NewTextRenderer()}, cfg: validConfig},
+		{name: "nil input", deps: Dependencies{Output: io.Discard, ErrOutput: io.Discard, Renderer: NewTextRenderer(), Events: NewTextRenderer(), Logger: logger}, cfg: validConfig},
+		{name: "nil output", deps: Dependencies{Input: strings.NewReader(""), ErrOutput: io.Discard, Renderer: NewTextRenderer(), Events: NewTextRenderer(), Logger: logger}, cfg: validConfig},
+		{name: "nil error output", deps: Dependencies{Input: strings.NewReader(""), Output: io.Discard, Renderer: NewTextRenderer(), Events: NewTextRenderer(), Logger: logger}, cfg: validConfig},
+		{name: "nil renderer", deps: Dependencies{Input: strings.NewReader(""), Output: io.Discard, ErrOutput: io.Discard, Events: NewTextRenderer(), Logger: logger}, cfg: validConfig},
+		{name: "nil events", deps: Dependencies{Input: strings.NewReader(""), Output: io.Discard, ErrOutput: io.Discard, Renderer: NewTextRenderer(), Logger: logger}, cfg: validConfig},
+		{name: "nil logger", deps: Dependencies{Input: strings.NewReader(""), Output: io.Discard, ErrOutput: io.Discard, Renderer: NewTextRenderer(), Events: NewTextRenderer()}, cfg: validConfig},
 		{name: "empty session key", deps: validDeps, cfg: Config{Prompt: "> ", MaxInputBytes: 1}},
 		{name: "empty prompt", deps: validDeps, cfg: Config{SessionKey: "cli:default", MaxInputBytes: 1}},
 		{name: "invalid size", deps: validDeps, cfg: Config{Prompt: "> ", SessionKey: "cli:default"}},
@@ -111,7 +114,8 @@ func TestNewCLIRejectsInvalidDependenciesAndConfig(t *testing.T) {
 func TestCLIRunContinuesAfterRecoverableError(t *testing.T) {
 	client, output, errOutput := newTestCLI(t, "bad\ngood\n/exit\n", 1024)
 	calls := 0
-	err := client.Run(context.Background(), handlerFunc(func(_ context.Context, in channel.Inbound) (channel.Outbound, error) {
+	err := client.Run(context.Background(), handlerFunc(func(_ context.Context, request channel.Request) (channel.Outbound, error) {
+		in := request.Inbound
 		calls++
 		switch in.Text {
 		case "bad":
@@ -141,10 +145,35 @@ func TestCLIRunContinuesAfterRecoverableError(t *testing.T) {
 func TestCLIRunReturnsFatalHandlerError(t *testing.T) {
 	client, _, _ := newTestCLI(t, "hello\n", 1024)
 	want := errors.New("provider failed")
-	err := client.Run(context.Background(), handlerFunc(func(context.Context, channel.Inbound) (channel.Outbound, error) {
+	err := client.Run(context.Background(), handlerFunc(func(context.Context, channel.Request) (channel.Outbound, error) {
 		return channel.Outbound{}, want
 	}))
 	if !errors.Is(err, want) {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestCLIRunStreamsEventsWithoutRepeatingFinalReply(t *testing.T) {
+	client, output, _ := newTestCLI(t, "hello\n", 1024)
+	err := client.Run(context.Background(), handlerFunc(func(ctx context.Context, request channel.Request) (channel.Outbound, error) {
+		if err := request.Events.Emit(ctx, runstream.Event{Type: runstream.EventRunStarted, Sequence: 1}); err != nil {
+			return channel.Outbound{}, err
+		}
+		if err := request.Events.Emit(ctx, runstream.Event{Type: runstream.EventTurnStarted, Sequence: 2, Turn: 1}); err != nil {
+			return channel.Outbound{}, err
+		}
+		if err := request.Events.Emit(ctx, runstream.Event{Type: runstream.EventTextDelta, Sequence: 3, Turn: 1, Text: "answer"}); err != nil {
+			return channel.Outbound{}, err
+		}
+		if err := request.Events.Emit(ctx, runstream.Event{Type: runstream.EventRunCompleted, Sequence: 4}); err != nil {
+			return channel.Outbound{}, err
+		}
+		return channel.Outbound{SessionKey: request.Inbound.SessionKey, Text: "answer", Action: channel.ActionExit}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(output.String(), "answer"); got != 1 {
+		t.Fatalf("answer count=%d output=%q", got, output.String())
 	}
 }

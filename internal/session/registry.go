@@ -111,12 +111,7 @@ func (r *Registry) createAndSave(ctx context.Context, traceID string) (*Session,
 }
 
 func cloneSession(sess *Session) *Session {
-	if sess == nil {
-		return nil
-	}
-	result := *sess
-	result.Messages = sess.MessageCopy()
-	return &result
+	return sess.Clone()
 }
 
 func systemMessages(messages []llm.Message) []llm.Message {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/jack-wang-176/qemu-agent/internal/agent"
 	"github.com/jack-wang-176/qemu-agent/internal/channel"
+	"github.com/jack-wang-176/qemu-agent/internal/runstream"
 	"github.com/jack-wang-176/qemu-agent/internal/session"
 )
 
@@ -85,7 +86,10 @@ func (a *Application) RunOnce(ctx context.Context, traceID string, input string)
 		}
 	}
 	a.logger.DebugContext(ctx, "run one-shot session", "session_key", key, "trace_id", traceID)
-	out, err := a.Handle(ctx, channel.Inbound{Channel: "cli", SessionKey: key, Text: input})
+	out, err := a.Handle(ctx, channel.Request{
+		Inbound: channel.Inbound{Channel: "cli", SessionKey: key, Text: input},
+		Events:  runstream.NopSink{},
+	})
 	if err != nil {
 		return "", fmt.Errorf("run agent for trace %q: %w", traceID, err)
 	}
@@ -93,7 +97,8 @@ func (a *Application) RunOnce(ctx context.Context, traceID string, input string)
 }
 
 // Handle really deal run behavior
-func (a *Application) Handle(ctx context.Context, in channel.Inbound) (channel.Outbound, error) {
+func (a *Application) Handle(ctx context.Context, request channel.Request) (channel.Outbound, error) {
+	in := request.Inbound
 	if err := validateInbound(in); err != nil {
 		return channel.Outbound{}, err
 	}
@@ -119,7 +124,13 @@ func (a *Application) Handle(ctx context.Context, in channel.Inbound) (channel.O
 	defer a.toolRunMu.Unlock()
 	//inject session and run
 	err = a.sessions.WithSession(ctx, in.SessionKey, func(sess *session.Session) error {
-		result, err := a.runner.Run(ctx, sess, agent.RunInput{Text: in.Text, SessionKey: in.SessionKey, Channel: in.Channel, Interactive: in.Channel == "cli" && !strings.HasPrefix(in.SessionKey, "oneshot:")})
+		result, err := a.runner.Run(ctx, sess, agent.RunInput{
+			Text:        in.Text,
+			SessionKey:  in.SessionKey,
+			Channel:     in.Channel,
+			Interactive: in.Channel == "cli" && !strings.HasPrefix(in.SessionKey, "oneshot:"),
+			Events:      runstream.NormalizeSink(request.Events),
+		})
 		answer = result
 		return err
 	})
