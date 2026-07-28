@@ -1,6 +1,9 @@
 package llm
 
 import (
+	"fmt"
+	"math"
+
 	"github.com/openai/openai-go/v3"
 )
 
@@ -105,4 +108,76 @@ func fromOpenAIMessage(m openai.ChatCompletionMessage) Message {
 		msg.ToolCalls = append(msg.ToolCalls, toolCall)
 	}
 	return msg
+}
+
+// convertStreamParams converts the provider-neutral request into the complete
+// SDK request used by Chat.Completions.NewStreaming. The SDK's NewStreaming
+// method sets the top-level "stream" field itself; StreamOptions only controls
+// additional stream behavior.
+func convertStreamParams(req Request) openai.ChatCompletionNewParams {
+	out := toOpenAIParams(req)
+	out.StreamOptions = openai.ChatCompletionStreamOptionsParam{
+		IncludeUsage: openai.Bool(true),
+	}
+	return out
+}
+
+// fromOpenAIChunk converts one SDK chunk into one provider-neutral stream
+// event. A chunk may contain text and multiple parallel tool-call deltas.
+func fromOpenAIChunk(chunk openai.ChatCompletionChunk) (StreamEvent, error) {
+	event := StreamEvent{}
+
+	if chunk.JSON.Usage.Valid() {
+		usage := Usage{
+			PromptToken:     chunk.Usage.PromptTokens,
+			CompletionToken: chunk.Usage.CompletionTokens,
+			TotalToken:      chunk.Usage.TotalTokens,
+		}
+		if usage.PromptToken < 0 || usage.CompletionToken < 0 || usage.TotalToken < 0 {
+			return StreamEvent{}, fmt.Errorf("OpenAI stream usage contains negative token count")
+		}
+		event.Usage = &usage
+	}
+
+	if len(chunk.Choices) == 0 {
+		if event.Usage == nil {
+			return StreamEvent{}, fmt.Errorf("OpenAI stream chunk has neither choice nor usage")
+		}
+		return event, nil
+	}
+	if len(chunk.Choices) != 1 {
+		return StreamEvent{}, fmt.Errorf("OpenAI stream chunk contains %d choices; want 1", len(chunk.Choices))
+	}
+
+	choice := chunk.Choices[0]
+	if choice.Index != 0 {
+		return StreamEvent{}, fmt.Errorf("OpenAI stream choice index is %d; want 0", choice.Index)
+	}
+	event.TextDelta = choice.Delta.Content
+	event.ToolCallDeltas = make([]ToolCallDelta, 0, len(choice.Delta.ToolCalls))
+	for _, call := range choice.Delta.ToolCalls {
+		if call.Index < 0 || call.Index > int64(math.MaxInt) {
+			return StreamEvent{}, fmt.Errorf("OpenAI tool call index %d cannot fit in int", call.Index)
+		}
+		event.ToolCallDeltas = append(event.ToolCallDeltas, ToolCallDelta{
+			Index:     int(call.Index),
+			ID:        call.ID,
+			Name:      call.Function.Name,
+			Arguments: call.Function.Arguments,
+		})
+	}
+
+	switch choice.FinishReason {
+	case "":
+	case "stop", "tool_calls":
+		event.Done = true
+	case "length":
+		return StreamEvent{}, fmt.Errorf("OpenAI stream stopped because the completion token limit was reached")
+	case "content_filter":
+		return StreamEvent{}, fmt.Errorf("OpenAI stream stopped by the content filter")
+	default:
+		return StreamEvent{}, fmt.Errorf("unsupported OpenAI stream finish reason %q", choice.FinishReason)
+	}
+
+	return event, nil
 }

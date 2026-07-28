@@ -17,6 +17,7 @@ type Dependencies struct {
 	Output    io.Writer
 	ErrOutput io.Writer
 	Renderer  Renderer
+	Events    EventRendererFactory
 	Logger    *slog.Logger
 }
 
@@ -31,6 +32,7 @@ type CLI struct {
 	output        io.Writer
 	errOutput     io.Writer
 	renderer      Renderer
+	events        EventRendererFactory
 	logger        *slog.Logger
 	prompt        string
 	sessionKey    string
@@ -70,11 +72,20 @@ func (c *CLI) Run(ctx context.Context, handler channel.Handler) error {
 			continue
 		}
 
-		out, err := handler.Handle(ctx, channel.Inbound{
-			SessionKey: c.sessionKey,
-			Channel:    c.Name(),
-			Text:       line,
+		requestRenderer, err := c.events.New(c.output)
+		if err != nil {
+			return fmt.Errorf("create CLI request renderer: %w", err)
+		}
+		out, handleErr := handler.Handle(ctx, channel.Request{
+			Inbound: channel.Inbound{
+				SessionKey: c.sessionKey,
+				Channel:    c.Name(),
+				Text:       line,
+			},
+			Events: requestRenderer,
 		})
+		finishErr := requestRenderer.Finish(ctx)
+		err = errors.Join(handleErr, finishErr)
 
 		if err != nil {
 			if channel.IsRecoverable(err) {
@@ -94,6 +105,9 @@ func (c *CLI) Run(ctx context.Context, handler channel.Handler) error {
 		}
 		if out.Action == channel.ActionExit {
 			return nil
+		}
+		if requestRenderer.StreamedText() {
+			continue
 		}
 		if err := c.renderer.Reply(c.output, out); err != nil {
 			return fmt.Errorf("render CLI reply: %w", err)
@@ -122,6 +136,9 @@ func NewCLI(deps Dependencies, cfg Config) (*CLI, error) {
 	if deps.Renderer == nil {
 		return nil, errors.New("CLI renderer is nil")
 	}
+	if deps.Events == nil {
+		return nil, errors.New("CLI event renderer factory is nil")
+	}
 	if deps.Logger == nil {
 		return nil, errors.New("CLI logger is nil")
 	}
@@ -144,6 +161,7 @@ func NewCLI(deps Dependencies, cfg Config) (*CLI, error) {
 		output:        deps.Output,
 		errOutput:     deps.ErrOutput,
 		renderer:      deps.Renderer,
+		events:        deps.Events,
 		logger:        deps.Logger,
 		prompt:        cfg.Prompt,
 		sessionKey:    cfg.SessionKey,

@@ -44,7 +44,6 @@ type Request struct {
 	Messages  []Message    `json:"messages"`
 	Tools     []ToolSchema `json:"tools,omitempty"`
 	MaxTokens int          `json:"max_tokens,omitempty"`
-	Stream    bool         `json:"stream,omitempty"`
 }
 
 /* Response is deliver message from model and translate.*/
@@ -55,10 +54,17 @@ type Response struct {
 
 /* initilize the stream function*/
 type StreamEvent struct {
-	DeltaText string
-	ToolCall  *ToolCall
-	Done      bool
-	Err       error
+	TextDelta      string
+	ToolCallDeltas []ToolCallDelta
+	Done           bool
+	Usage          *Usage
+}
+
+type ToolCallDelta struct {
+	Index     int
+	ID        string
+	Name      string
+	Arguments string
 }
 
 type Capabilities struct {
@@ -70,6 +76,11 @@ type Capabilities struct {
 type Provider interface {
 	Name() string
 	Capability() Capabilities
-	Complete(ctx context.Context, req Request) (*Response, error)
-	Stream(ctx context.Context, req Request) (<-chan StreamEvent, error)
+	Complete(context.Context, Request) (*Response, error)
+	Stream(context.Context, Request) (Stream, error)
+}
+
+type Stream interface {
+	Close() error
+	Recv(context.Context) (StreamEvent, error)
 }

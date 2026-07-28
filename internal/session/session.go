@@ -110,11 +110,62 @@ func (s *Session) AddToolResult(data, ID string) {
 
 /* copy and change was used for session refresh.*/
 func (s *Session) MessageCopy() []llm.Message {
-	return append([]llm.Message(nil), s.Messages...)
+	return cloneMessages(s.Messages)
 }
 
 func (s *Session) MessageReplace(msgs []llm.Message, usage int) {
-	s.Messages = append(s.Messages[:0], msgs...)
+	s.Messages = cloneMessages(msgs)
 	s.TokenUsage = usage
 	s.touch()
+}
+
+// Clone returns a deep copy suitable for request-scoped speculative updates.
+func (s *Session) Clone() *Session {
+	if s == nil {
+		return nil
+	}
+	clone := *s
+	clone.Messages = cloneMessages(s.Messages)
+	return &clone
+}
+
+// CanReplaceFrom validates that another value is the same persistent session.
+// Agent runs may update messages, usage and timestamps, but not identity/model.
+func (s *Session) CanReplaceFrom(other *Session) error {
+	if s == nil || other == nil {
+		return errors.New("session replacement is nil")
+	}
+	if s.ID != other.ID {
+		return errors.New("session replacement changes id")
+	}
+	if s.TraceID != other.TraceID {
+		return errors.New("session replacement changes trace id")
+	}
+	if s.ModelRef != other.ModelRef {
+		return errors.New("session replacement changes model ref")
+	}
+	if !s.CreatedAt.Equal(other.CreatedAt) {
+		return errors.New("session replacement changes creation time")
+	}
+	return nil
+}
+
+// ReplaceFrom commits a previously validated working copy to the live session.
+func (s *Session) ReplaceFrom(other *Session) error {
+	if err := s.CanReplaceFrom(other); err != nil {
+		return err
+	}
+	s.Messages = cloneMessages(other.Messages)
+	s.TokenUsage = other.TokenUsage
+	s.UpdatedAt = other.UpdatedAt
+	return nil
+}
+
+func cloneMessages(messages []llm.Message) []llm.Message {
+	result := make([]llm.Message, len(messages))
+	for index, message := range messages {
+		result[index] = message
+		result[index].ToolCalls = append([]llm.ToolCall(nil), message.ToolCalls...)
+	}
+	return result
 }

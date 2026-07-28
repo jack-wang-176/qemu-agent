@@ -90,15 +90,35 @@ func (f *FileStore) Save(ctx context.Context, s *Session) error {
 	if err != nil {
 		return fmt.Errorf("marshal session: %w", err)
 	}
-	tmp := filepath.Join(f.dir, s.ID+".json.tmp")
 	dst := filepath.Join(f.dir, s.ID+".json")
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
-		return err
+	tmp, err := os.CreateTemp(f.dir, s.ID+".json.tmp-*")
+	if err != nil {
+		return fmt.Errorf("create session temp file: %w", err)
 	}
-	if err := os.Rename(tmp, dst); err != nil {
-		_ = os.Remove(tmp)
-		return err
+	tmpName := tmp.Name()
+	committed := false
+	defer func() {
+		_ = tmp.Close()
+		if !committed {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if err := tmp.Chmod(0600); err != nil {
+		return fmt.Errorf("set session temp permissions: %w", err)
 	}
+	if _, err := tmp.Write(data); err != nil {
+		return fmt.Errorf("write session temp file: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return fmt.Errorf("sync session temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close session temp file: %w", err)
+	}
+	if err := os.Rename(tmpName, dst); err != nil {
+		return fmt.Errorf("commit session file: %w", err)
+	}
+	committed = true
 	return nil
 }
 
