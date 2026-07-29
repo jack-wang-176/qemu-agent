@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 )
 
 var ErrNilEnvironmentLookup = errors.New("environment lookup is nil")
@@ -138,23 +139,63 @@ func (c Config) Validate() error {
 	}
 
 	// channel config validate
-	if strings.TrimSpace(c.Channel.CLISessionKey) == "" {
+	if !c.Channel.CLIEnabled && !c.Channel.Telegram.Enabled {
+		return errors.New("at least one channel must be enabled")
+	}
+	if c.Channel.CLIEnabled && strings.TrimSpace(c.Channel.CLISessionKey) == "" {
 		return errors.New("QEMU_AGENT_CLI_SESSION_KEY is empty")
 	}
-	if !strings.HasPrefix(c.Channel.CLISessionKey, "cli:") {
+	if c.Channel.CLIEnabled && !strings.HasPrefix(c.Channel.CLISessionKey, "cli:") {
 		return fmt.Errorf("QEMU_AGENT_CLI_SESSION_KEY must start with cli:, got %q", c.Channel.CLISessionKey)
 	}
-	if c.Channel.CLIPrompt == "" {
+	if c.Channel.CLIEnabled && c.Channel.CLIPrompt == "" {
 		return errors.New("QEMU_AGENT_CLI_PROMPT is empty")
 	}
-	if strings.ContainsRune(c.Channel.CLIPrompt, '\x00') {
+	if c.Channel.CLIEnabled && strings.ContainsRune(c.Channel.CLIPrompt, '\x00') {
 		return errors.New("QEMU_AGENT_CLI_PROMPT contains NUL")
 	}
-	if c.Channel.MaxInputBytes <= 0 || c.Channel.MaxInputBytes > MaxCLIInputBytes {
+	if c.Channel.CLIEnabled && (c.Channel.MaxInputBytes <= 0 || c.Channel.MaxInputBytes > MaxCLIInputBytes) {
 		return fmt.Errorf(
 			"QEMU_AGENT_CLI_MAX_INPUT_BYTES must be between 1 and %d",
 			MaxCLIInputBytes,
 		)
+	}
+	if c.Channel.Telegram.Enabled {
+		tg := c.Channel.Telegram
+		if strings.TrimSpace(tg.Token) == "" {
+			return errors.New("telegram token is empty")
+		}
+		if len(tg.AllowedUserIDs) == 0 {
+			return errors.New("telegram allowed user ids are empty")
+		}
+		if tg.PollTimeout < time.Second || tg.PollTimeout > 50*time.Second {
+			return errors.New("telegram poll timeout must be between 1s and 50s")
+		}
+		if tg.RetryMinBackoff <= 0 || tg.RetryMaxBackoff < tg.RetryMinBackoff {
+			return errors.New("telegram retry backoff is invalid")
+		}
+		if tg.MaxConcurrency < 1 || tg.MaxConcurrency > 64 {
+			return errors.New("telegram max concurrency must be between 1 and 64")
+		}
+		if tg.MaxInputBytes <= 0 {
+			return errors.New("telegram max input bytes must be > 0")
+		}
+		if tg.EditInterval < 250*time.Millisecond {
+			return errors.New("telegram edit interval must be at least 250ms")
+		}
+		if tg.MessageChunkSize < 1 || tg.MessageChunkSize > 4096 {
+			return errors.New("telegram message chunk size must be between 1 and 4096")
+		}
+		seen := make(map[int64]struct{}, len(tg.AllowedUserIDs))
+		for _, id := range tg.AllowedUserIDs {
+			if id <= 0 {
+				return errors.New("telegram allowed user id must be positive")
+			}
+			if _, exists := seen[id]; exists {
+				return fmt.Errorf("duplicate telegram allowed user id %d", id)
+			}
+			seen[id] = struct{}{}
+		}
 	}
 
 	// path fetch

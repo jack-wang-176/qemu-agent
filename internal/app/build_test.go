@@ -39,7 +39,7 @@ func validBuildConfig(t *testing.T) config.Config {
 		Tools:     config.ToolConfig{Timeout: 1, MaxOutputBytes: 1, ReadMaxLines: 1},
 		Log:       config.LogConfig{Level: "info", Format: "text"},
 		Providers: config.ProviderConfig{Ollama: config.APIConfig{BaseURL: config.DefaultOllamaBaseURL}},
-		Channel:   config.ChannelConfig{CLISessionKey: config.DefaultCLISessionKey, CLIPrompt: config.DefaultCLIPrompt, MaxInputBytes: config.DefaultMaxInputBytes},
+		Channel:   config.ChannelConfig{CLIEnabled: true, CLISessionKey: config.DefaultCLISessionKey, CLIPrompt: config.DefaultCLIPrompt, MaxInputBytes: config.DefaultMaxInputBytes},
 		Security:  config.SecurityConfig{Mode: config.DefaultSecurityMode, AuditPath: t.TempDir() + "/tools.jsonl", ApprovalTimeout: config.DefaultApprovalTimeout, MaxAuditArgBytes: config.DefaultMaxAuditArgBytes, MaxAuditOutBytes: config.DefaultMaxAuditOutBytes},
 	}
 }
@@ -54,5 +54,45 @@ func TestBuildCreatesCLIChannel(t *testing.T) {
 	}
 	if len(runtime.Channels) != 1 || runtime.Channels[0].Name() != "cli" {
 		t.Fatalf("channels = %#v", runtime.Channels)
+	}
+}
+
+func TestBuildCreatesTelegramOnlyAndBothChannels(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		cli  bool
+		want int
+	}{
+		{name: "telegram only", cli: false, want: 1},
+		{name: "both", cli: true, want: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := validBuildConfig(t)
+			cfg.Channel.CLIEnabled = test.cli
+			cfg.Channel.Telegram = config.TelegramConfig{
+				Enabled: true, Token: "token", AllowedUserIDs: []int64{1},
+				PollTimeout:      config.DefaultTelegramPollTimeout,
+				RetryMinBackoff:  config.DefaultTelegramRetryMinBackoff,
+				RetryMaxBackoff:  config.DefaultTelegramRetryMaxBackoff,
+				MaxConcurrency:   config.DefaultTelegramMaxConcurrency,
+				MaxInputBytes:    config.DefaultTelegramMaxInputBytes,
+				EditInterval:     config.DefaultTelegramEditInterval,
+				MessageChunkSize: config.DefaultTelegramMessageChunkSize,
+			}
+			input := BuildInput{Config: cfg, SystemPrompt: "system", LogOutput: io.Discard}
+			if test.cli {
+				input.CLI = CLIAdapters{Input: &emptyReader{}, Output: io.Discard, ErrOutput: io.Discard}
+			}
+			runtime, err := Build(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(runtime.Channels) != test.want {
+				t.Fatalf("channels=%d", len(runtime.Channels))
+			}
+			if runtime.Channels[len(runtime.Channels)-1].Name() != "telegram" {
+				t.Fatalf("channels=%#v", runtime.Channels)
+			}
+		})
 	}
 }

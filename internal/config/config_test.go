@@ -44,9 +44,30 @@ func TestSummaryDoesNotExposeAPIKeys(t *testing.T) {
 		Providers: ProviderConfig{
 			OpenRouter: APIConfig{APIKey: "secret-value"},
 		},
+		Channel: ChannelConfig{Telegram: TelegramConfig{Token: "telegram-secret"}},
 	}
-	if strings.Contains(fmt.Sprintf("%+v", cfg.Summary()), "secret-value") {
-		t.Fatal("Summary exposed API key")
+	summary := fmt.Sprintf("%+v", cfg.Summary())
+	if strings.Contains(summary, "secret-value") || strings.Contains(summary, "telegram-secret") {
+		t.Fatal("Summary exposed a credential")
+	}
+}
+
+func TestLoadPopulatesTelegramConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg, err := Load(lookupFrom(map[string]string{
+		"QEMU_AGENT_PROVIDER": "ollama", "QEMU_AGENT_WORKSPACE": t.TempDir(),
+		"QEMU_AGENT_CLI_ENABLED": "false", "QEMU_AGENT_TELEGRAM_ENABLED": "true",
+		"QEMU_AGENT_TELEGRAM_TOKEN": "token", "QEMU_AGENT_TELEGRAM_ALLOWED_USER_IDS": "20,10,20",
+	}), Overrides{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Channel.CLIEnabled || !cfg.Channel.Telegram.Enabled {
+		t.Fatalf("channel=%#v", cfg.Channel)
+	}
+	got := cfg.Channel.Telegram.AllowedUserIDs
+	if len(got) != 2 || got[0] != 20 || got[1] != 10 {
+		t.Fatalf("allowed=%v", got)
 	}
 }
 
@@ -95,7 +116,7 @@ func TestChannelConfigValidation(t *testing.T) {
 		Tools:     ToolConfig{Timeout: 1, MaxOutputBytes: 1, ReadMaxLines: 1},
 		Log:       LogConfig{Level: "info", Format: "text"},
 		Providers: ProviderConfig{Ollama: APIConfig{BaseURL: DefaultOllamaBaseURL}},
-		Channel:   ChannelConfig{CLISessionKey: DefaultCLISessionKey, CLIPrompt: DefaultCLIPrompt, MaxInputBytes: DefaultMaxInputBytes},
+		Channel:   ChannelConfig{CLIEnabled: true, CLISessionKey: DefaultCLISessionKey, CLIPrompt: DefaultCLIPrompt, MaxInputBytes: DefaultMaxInputBytes},
 	}
 	tests := []struct {
 		name   string
