@@ -62,9 +62,25 @@ type ProviderConfig struct {
 }
 
 type ChannelConfig struct {
+	CLIEnabled    bool
 	CLISessionKey string
 	CLIPrompt     string
 	MaxInputBytes int
+	Telegram      TelegramConfig
+}
+
+type TelegramConfig struct {
+	Enabled          bool
+	Token            string
+	AllowedUserIDs   []int64
+	AllowGroupChats  bool
+	PollTimeout      time.Duration
+	RetryMinBackoff  time.Duration
+	RetryMaxBackoff  time.Duration
+	MaxConcurrency   int
+	MaxInputBytes    int
+	EditInterval     time.Duration
+	MessageChunkSize int
 }
 
 type SecurityConfig struct {
