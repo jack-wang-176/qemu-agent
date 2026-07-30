@@ -26,7 +26,7 @@ func newTestRouter(t *testing.T, contextManager ContextCommands) (*CommandRouter
 	if contextManager == nil {
 		contextManager = testContextManager{}
 	}
-	router, err := NewCommandRouter(CommandDependencies{Sessions: registry, Updater: registry, Context: contextManager, Models: models})
+	router, err := NewCommandRouter(testCommandDependencies(t, registry, contextManager, models), CommandConfig{MemoryTopK: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,16 +66,33 @@ func TestNewCommandRouterRejectsNilDependencies(t *testing.T) {
 		{Sessions: registry, Updater: registry, Context: ctx},
 	}
 	for _, deps := range tests {
-		if _, err := NewCommandRouter(deps); err == nil {
+		if _, err := NewCommandRouter(deps, CommandConfig{MemoryTopK: 3}); err == nil {
 			t.Fatal("error = nil")
 		}
+	}
+	// A knowledge dependency is as required as a session one: a nil store would
+	// turn /memory into a panic instead of "memory is disabled".
+	full := testCommandDependencies(t, registry, ctx, newTestModels(t))
+	for _, mutate := range []func(*CommandDependencies){
+		func(d *CommandDependencies) { d.Skills = nil },
+		func(d *CommandDependencies) { d.Memories = nil },
+		func(d *CommandDependencies) { d.Candidates = nil },
+	} {
+		deps := full
+		mutate(&deps)
+		if _, err := NewCommandRouter(deps, CommandConfig{MemoryTopK: 3}); err == nil {
+			t.Fatal("error = nil for a missing knowledge dependency")
+		}
+	}
+	if _, err := NewCommandRouter(full, CommandConfig{}); err == nil {
+		t.Fatal("error = nil for a zero memory top-k")
 	}
 }
 
 func TestCommandRouterUsageAndUnknownErrorsAreRecoverable(t *testing.T) {
 	router, _ := newTestRouter(t, nil)
 	for _, input := range []string{"/new extra", "/resume", "/compact extra", "/unknown"} {
-		_, err := router.Execute(context.Background(), "cli:default", parseForTest(t, input))
+		_, err := router.Execute(context.Background(), testCommandContext("cli:default"), parseForTest(t, input))
 		if err == nil || !channel.IsRecoverable(err) {
 			t.Fatalf("Execute(%q) error = %v", input, err)
 		}
@@ -87,7 +104,7 @@ func TestCommandRouterSessionLifecycle(t *testing.T) {
 	ctx := context.Background()
 	key := "cli:default"
 
-	created, err := router.Execute(ctx, key, parseForTest(t, "/new"))
+	created, err := router.Execute(ctx, testCommandContext(key), parseForTest(t, "/new"))
 	if err != nil || !strings.Contains(created.Text, "new session:") {
 		t.Fatalf("new = %#v, %v", created, err)
 	}
@@ -102,12 +119,12 @@ func TestCommandRouterSessionLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	history, err := router.Execute(ctx, key, parseForTest(t, "/history"))
+	history, err := router.Execute(ctx, testCommandContext(key), parseForTest(t, "/history"))
 	if err != nil || !strings.Contains(history.Text, "user: hello") {
 		t.Fatalf("history = %#v, %v", history, err)
 	}
 
-	reset, err := router.Execute(ctx, key, parseForTest(t, "/reset"))
+	reset, err := router.Execute(ctx, testCommandContext(key), parseForTest(t, "/reset"))
 	if err != nil || !strings.Contains(reset.Text, first.ID) {
 		t.Fatalf("reset = %#v, %v", reset, err)
 	}
@@ -116,7 +133,7 @@ func TestCommandRouterSessionLifecycle(t *testing.T) {
 		t.Fatalf("current = %#v", current)
 	}
 
-	_, err = router.Execute(ctx, key, parseForTest(t, "/new"))
+	_, err = router.Execute(ctx, testCommandContext(key), parseForTest(t, "/new"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +142,7 @@ func TestCommandRouterSessionLifecycle(t *testing.T) {
 		t.Fatal("new session reused ID")
 	}
 
-	resumed, err := router.Execute(ctx, key, parseForTest(t, "/resume "+first.ID))
+	resumed, err := router.Execute(ctx, testCommandContext(key), parseForTest(t, "/resume "+first.ID))
 	if err != nil || !strings.Contains(resumed.Text, first.ID) {
 		t.Fatalf("resume = %#v, %v", resumed, err)
 	}
@@ -134,7 +151,7 @@ func TestCommandRouterSessionLifecycle(t *testing.T) {
 		t.Fatalf("current ID = %q", current.ID)
 	}
 
-	listed, err := router.Execute(ctx, key, parseForTest(t, "/sessions"))
+	listed, err := router.Execute(ctx, testCommandContext(key), parseForTest(t, "/sessions"))
 	if err != nil || !strings.Contains(listed.Text, first.ID) || !strings.Contains(listed.Text, second.ID) {
 		t.Fatalf("sessions = %#v, %v", listed, err)
 	}
@@ -155,7 +172,7 @@ func TestCommandRouterCompact(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	result, err := router.Execute(ctx, key, parseForTest(t, "/compact"))
+	result, err := router.Execute(ctx, testCommandContext(key), parseForTest(t, "/compact"))
 	if err != nil || result.Action != channel.ActionReply {
 		t.Fatalf("compact = %#v, %v", result, err)
 	}
@@ -174,7 +191,7 @@ func TestCommandRouterCompactFailurePreservesSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	before, _ := registry.Current(ctx, key)
-	_, err := router.Execute(ctx, key, parseForTest(t, "/compact"))
+	_, err := router.Execute(ctx, testCommandContext(key), parseForTest(t, "/compact"))
 	if !errors.Is(err, want) {
 		t.Fatalf("error = %v", err)
 	}
@@ -190,15 +207,15 @@ func TestCommandRouterModelCurrentListAndSelect(t *testing.T) {
 	if _, err := registry.New(ctx, "cli:default"); err != nil {
 		t.Fatal(err)
 	}
-	current, err := router.Execute(ctx, "cli:default", parseForTest(t, "/model"))
+	current, err := router.Execute(ctx, testCommandContext("cli:default"), parseForTest(t, "/model"))
 	if err != nil || !strings.Contains(current.Text, "ollama:test-model") {
 		t.Fatalf("current = %#v, %v", current, err)
 	}
-	list, err := router.Execute(ctx, "cli:default", parseForTest(t, "/model list"))
+	list, err := router.Execute(ctx, testCommandContext("cli:default"), parseForTest(t, "/model list"))
 	if err != nil || !strings.Contains(list.Text, "test-model") {
 		t.Fatalf("list = %#v, %v", list, err)
 	}
-	selected, err := router.Execute(ctx, "cli:default", parseForTest(t, "/model model"))
+	selected, err := router.Execute(ctx, testCommandContext("cli:default"), parseForTest(t, "/model model"))
 	if err != nil || !strings.Contains(selected.Text, "ollama:model") {
 		t.Fatalf("selected = %#v, %v", selected, err)
 	}
@@ -213,7 +230,7 @@ func TestCommandRouterUnknownModelIsRecoverable(t *testing.T) {
 	if _, err := registry.New(context.Background(), "cli:default"); err != nil {
 		t.Fatal(err)
 	}
-	_, err := router.Execute(context.Background(), "cli:default", parseForTest(t, "/model missing"))
+	_, err := router.Execute(context.Background(), testCommandContext("cli:default"), parseForTest(t, "/model missing"))
 	if err == nil || !channel.IsRecoverable(err) {
 		t.Fatalf("error = %v", err)
 	}

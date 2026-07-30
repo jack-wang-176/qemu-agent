@@ -137,6 +137,137 @@ func resolveWorkspace(lookup LookupEnv) (string, error) {
 	return filepath.Clean(absolute), nil
 }
 
+// resolveDir returns an absolute clean directory for key, falling back to
+// fallback when the variable is absent. The fallback is already derived from
+// DataDir, which LoadEnv resolved to an absolute path.
+func resolveDir(lookup LookupEnv, key, fallback string) (string, error) {
+	value := envString(lookup, key, "")
+	if value == "" {
+		return filepath.Clean(fallback), nil
+	}
+	absolute, err := filepath.Abs(value)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", key, err)
+	}
+	return filepath.Clean(absolute), nil
+}
+
+// loadSkillConfig reads the Skill group. It never touches the filesystem:
+// scanning belongs to skills.ScanRegistry during Build.
+func loadSkillConfig(lookup LookupEnv, dataDir string) (SkillConfig, error) {
+	enabled, err := envBool(lookup, "QEMU_AGENT_SKILLS_ENABLED", DefaultSkillsEnabled)
+	if err != nil {
+		return SkillConfig{}, err
+	}
+	dir, err := resolveDir(lookup, "QEMU_AGENT_SKILLS_DIR", filepath.Join(dataDir, "skills"))
+	if err != nil {
+		return SkillConfig{}, err
+	}
+	maxSkills, err := envInt(lookup, "QEMU_AGENT_SKILLS_MAX_COUNT", DefaultMaxSkills)
+	if err != nil {
+		return SkillConfig{}, err
+	}
+	maxFileBytes, err := envInt(lookup, "QEMU_AGENT_SKILL_MAX_FILE_BYTES", DefaultMaxSkillFileBytes)
+	if err != nil {
+		return SkillConfig{}, err
+	}
+	maxBodyBytes, err := envInt(lookup, "QEMU_AGENT_SKILL_MAX_BODY_BYTES", DefaultMaxSkillBodyBytes)
+	if err != nil {
+		return SkillConfig{}, err
+	}
+	maxIndexBytes, err := envInt(lookup, "QEMU_AGENT_SKILL_MAX_INDEX_BYTES", DefaultMaxSkillIndexBytes)
+	if err != nil {
+		return SkillConfig{}, err
+	}
+	return SkillConfig{
+		Enabled:       enabled,
+		Dir:           dir,
+		MaxSkills:     maxSkills,
+		MaxFileBytes:  maxFileBytes,
+		MaxBodyBytes:  maxBodyBytes,
+		MaxIndexBytes: maxIndexBytes,
+	}, nil
+}
+
+// loadMemoryConfig reads the Memory group. I7-A only closes the values; the
+// Store, Sanitizer and Ranker arrive with I7-E/I7-F.
+func loadMemoryConfig(lookup LookupEnv, dataDir string) (MemoryConfig, error) {
+	enabled, err := envBool(lookup, "QEMU_AGENT_MEMORY_ENABLED", DefaultMemoryEnabled)
+	if err != nil {
+		return MemoryConfig{}, err
+	}
+	dir, err := resolveDir(lookup, "QEMU_AGENT_MEMORY_DIR", filepath.Join(dataDir, "memory"))
+	if err != nil {
+		return MemoryConfig{}, err
+	}
+	topK, err := envInt(lookup, "QEMU_AGENT_MEMORY_TOP_K", DefaultMemoryTopK)
+	if err != nil {
+		return MemoryConfig{}, err
+	}
+	maxItems, err := envInt(lookup, "QEMU_AGENT_MEMORY_MAX_ITEMS", DefaultMemoryMaxItems)
+	if err != nil {
+		return MemoryConfig{}, err
+	}
+	maxItemBytes, err := envInt(lookup, "QEMU_AGENT_MEMORY_MAX_ITEM_BYTES", DefaultMemoryMaxItemBytes)
+	if err != nil {
+		return MemoryConfig{}, err
+	}
+	maxInjectedBytes, err := envInt(lookup, "QEMU_AGENT_MEMORY_MAX_INJECTED_BYTES", DefaultMemoryMaxInjectedBytes)
+	if err != nil {
+		return MemoryConfig{}, err
+	}
+	halfLife, err := envDuration(lookup, "QEMU_AGENT_MEMORY_HALF_LIFE", DefaultMemoryHalfLife)
+	if err != nil {
+		return MemoryConfig{}, err
+	}
+	strictSearch, err := envBool(lookup, "QEMU_AGENT_MEMORY_STRICT_SEARCH", DefaultMemoryStrictSearch)
+	if err != nil {
+		return MemoryConfig{}, err
+	}
+	autoExtract, err := envBool(lookup, "QEMU_AGENT_MEMORY_AUTO_EXTRACT", DefaultMemoryAutoExtract)
+	if err != nil {
+		return MemoryConfig{}, err
+	}
+	candidateTTL, err := envDuration(lookup, "QEMU_AGENT_MEMORY_CANDIDATE_TTL", DefaultCandidateTTL)
+	if err != nil {
+		return MemoryConfig{}, err
+	}
+	return MemoryConfig{
+		Enabled:          enabled,
+		Dir:              dir,
+		TopK:             topK,
+		MaxItems:         maxItems,
+		MaxItemBytes:     maxItemBytes,
+		MaxInjectedBytes: maxInjectedBytes,
+		HalfLife:         halfLife,
+		StrictSearch:     strictSearch,
+		AutoExtract:      autoExtract,
+		CandidateTTL:     candidateTTL,
+	}, nil
+}
+
+// loadPromptConfig reads the request-level injection budget used by the
+// I7-G PromptAssembler.
+func loadPromptConfig(lookup LookupEnv) (PromptConfig, error) {
+	reserved, err := envInt(lookup, "QEMU_AGENT_PROMPT_RESERVED_TOKENS", DefaultPromptReservedTokens)
+	if err != nil {
+		return PromptConfig{}, err
+	}
+	maxInjected, err := envInt(lookup, "QEMU_AGENT_PROMPT_MAX_INJECTED_BYTES", DefaultPromptMaxBytes)
+	if err != nil {
+		return PromptConfig{}, err
+	}
+	maxMemoryItems, err := envInt(lookup, "QEMU_AGENT_PROMPT_MAX_MEMORY_ITEMS", DefaultPromptMaxMemoryItems)
+	if err != nil {
+		return PromptConfig{}, err
+	}
+	return PromptConfig{
+		ReservedContextTokens: reserved,
+		MaxInjectedBytes:      maxInjected,
+		MaxMemoryItems:        maxMemoryItems,
+	}, nil
+}
+
 // LoadEnv reads environment-backed values without performing final validation.
 // Validation is delayed until explicit overrides have been applied.
 func LoadEnv(lookup LookupEnv) (Config, error) {
@@ -274,6 +405,20 @@ func LoadEnv(lookup LookupEnv) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	// skill, memory and prompt config read
+	skillConfig, err := loadSkillConfig(lookup, dataDir)
+	if err != nil {
+		return Config{}, err
+	}
+	memoryConfig, err := loadMemoryConfig(lookup, dataDir)
+	if err != nil {
+		return Config{}, err
+	}
+	promptConfig, err := loadPromptConfig(lookup)
+	if err != nil {
+		return Config{}, err
+	}
+
 	// general config build
 	cfg := Config{
 		Agent: AgentConfig{
@@ -334,6 +479,9 @@ func LoadEnv(lookup LookupEnv) (Config, error) {
 			MaxAuditArgBytes: maxAuditArgs,
 			MaxAuditOutBytes: maxAuditOutput,
 		},
+		Skills: skillConfig,
+		Memory: memoryConfig,
+		Prompt: promptConfig,
 	}
 
 	return cfg, nil

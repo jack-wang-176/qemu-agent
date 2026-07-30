@@ -41,12 +41,22 @@ type Approval struct {
 	At       time.Time
 }
 
-// execute return struct
+// execute return struct. Output is what the model may see for this request;
+// PersistentOutput is what the session is allowed to keep. They differ only for
+// tools that return transient payloads, such as use_skill.
 type Result struct {
-	InvocationID string
-	Output       string
-	Decision     Decision
-	Rule         string
-	StartedAt    time.Time
-	FinishedAt   time.Time
+	InvocationID     string
+	Output           string
+	PersistentOutput string
+	Decision         Decision
+	Rule             string
+	StartedAt        time.Time
+	FinishedAt       time.Time
+}
+
+// ProjectionChanged reports whether the persisted text differs from what the
+// model saw. The audit log records this so a shrinking transcript is explained
+// by a projection rather than looking like data loss.
+func (r Result) ProjectionChanged() bool {
+	return r.PersistentOutput != "" && r.PersistentOutput != r.Output
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jack-wang-176/qemu-agent/internal/tools"
 	"github.com/jack-wang-176/qemu-agent/internal/tools/schema"
 )
 
@@ -36,19 +37,19 @@ func (bt *BashTool) Spec() schema.Spec {
 		schema.Required("command", schema.String("The bash command to execute")),
 	))
 }
-func (bt *BashTool) Execute(ctx context.Context, args string) (string, error) {
+func (bt *BashTool) Execute(ctx context.Context, args string) (tools.ExecutionResult, error) {
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return tools.ExecutionResult{}, err
 	}
 	var arg BashToolParam
 	if err := json.Unmarshal([]byte(args), &arg); err != nil {
-		return "", fmt.Errorf("decode bash args: %w", err)
+		return tools.ExecutionResult{}, fmt.Errorf("decode bash args: %w", err)
 	}
 	if strings.TrimSpace(arg.Command) == "" {
-		return "", fmt.Errorf("command is required")
+		return tools.ExecutionResult{}, fmt.Errorf("command is required")
 	}
 	if bt.timeout <= 0 || bt.maxOutputBytes <= 0 {
-		return "", fmt.Errorf("invalid bash tool limits")
+		return tools.ExecutionResult{}, fmt.Errorf("invalid bash tool limits")
 	}
 	commandCtx, cancel := context.WithTimeout(ctx, bt.timeout)
 	defer cancel()
@@ -65,10 +66,10 @@ func (bt *BashTool) Execute(ctx context.Context, args string) (string, error) {
 		result += fmt.Sprintf("\n[truncated after %d bytes]", bt.maxOutputBytes)
 	}
 	if commandCtx.Err() == context.DeadlineExceeded {
-		return result, fmt.Errorf("bash command timed out after %s", bt.timeout)
+		return tools.SameOutput(result), fmt.Errorf("bash command timed out after %s", bt.timeout)
 	}
 	if err != nil {
-		return result, fmt.Errorf("bash command failed: %w", err)
+		return tools.SameOutput(result), fmt.Errorf("bash command failed: %w", err)
 	}
-	return result, nil
+	return tools.SameOutput(result), nil
 }

@@ -81,8 +81,26 @@ func (e *Executor) Execute(ctx context.Context, in Invocation) (Result, error) {
 	if err := e.writeAudit(ctx, "authorized", in, assessment, approval, Result{StartedAt: started}, nil); err != nil {
 		return Result{}, fmt.Errorf("write pre-execution audit: %w", err)
 	}
-	output, execErr := tool.Execute(ctx, in.Arguments)
-	result := Result{InvocationID: in.ID, Output: output, Decision: assessment.Decision, Rule: assessment.Rule, StartedAt: started, FinishedAt: e.now()}
+	execution, execErr := tool.Execute(ctx, in.Arguments)
+	if execErr == nil {
+		// A successful call must produce model output; an empty result would
+		// reach the provider as a tool message with no content.
+		normalized, normalizeErr := execution.Normalize()
+		if normalizeErr != nil {
+			execErr = fmt.Errorf("tool %q result: %w", in.ToolName, normalizeErr)
+		} else {
+			execution = normalized
+		}
+	}
+	if execution.PersistentOutput == "" {
+		// Failure paths may carry partial output only; persisting the same text
+		// keeps the transcript and the model view consistent.
+		execution.PersistentOutput = execution.ModelOutput
+	}
+	result := Result{
+		InvocationID: in.ID, Output: execution.ModelOutput, PersistentOutput: execution.PersistentOutput,
+		Decision: assessment.Decision, Rule: assessment.Rule, StartedAt: started, FinishedAt: e.now(),
+	}
 	return result, errors.Join(execErr, e.writeAudit(ctx, "completed", in, assessment, approval, result, execErr))
 }
 
@@ -130,6 +148,10 @@ func (e *Executor) writeAudit(ctx context.Context, phase string, in Invocation, 
 		approved := approval.Approved
 		event.Approved = &approved
 		event.Actor = approval.Actor
+	}
+	if result.ProjectionChanged() {
+		event.ProjectionChanged = true
+		event.PersistentOutput = e.redactor.RedactOutput(in.ToolName, result.PersistentOutput)
 	}
 	if eventErr != nil {
 		event.Error = e.redactor.RedactOutput(in.ToolName, eventErr.Error())

@@ -111,12 +111,18 @@ func TestLoadPopulatesCLIConfigFromEnvironment(t *testing.T) {
 func TestChannelConfigValidation(t *testing.T) {
 	base := Config{
 		Agent:     AgentConfig{Provider: "ollama", Model: "model", MaxTurns: 1},
+		Models:    ModelConfig{Definitions: []ModelDefinitionConfig{{Provider: "ollama", Name: "model", MaxContext: 4096, Tools: true}}},
 		Context:   ContextConfig{MaxTokens: 1},
 		Paths:     PathConfig{Workspace: t.TempDir()},
 		Tools:     ToolConfig{Timeout: 1, MaxOutputBytes: 1, ReadMaxLines: 1},
 		Log:       LogConfig{Level: "info", Format: "text"},
 		Providers: ProviderConfig{Ollama: APIConfig{BaseURL: DefaultOllamaBaseURL}},
 		Channel:   ChannelConfig{CLIEnabled: true, CLISessionKey: DefaultCLISessionKey, CLIPrompt: DefaultCLIPrompt, MaxInputBytes: DefaultMaxInputBytes},
+		Security:  SecurityConfig{Mode: DefaultSecurityMode, AuditPath: t.TempDir() + "/tools.jsonl", ApprovalTimeout: DefaultApprovalTimeout, MaxAuditArgBytes: DefaultMaxAuditArgBytes, MaxAuditOutBytes: DefaultMaxAuditOutBytes},
+		Prompt:    PromptConfig{ReservedContextTokens: DefaultPromptReservedTokens, MaxInjectedBytes: DefaultPromptMaxBytes, MaxMemoryItems: DefaultPromptMaxMemoryItems},
+	}
+	if err := base.Validate(); err != nil {
+		t.Fatalf("base config must be valid: %v", err)
 	}
 	tests := []struct {
 		name   string

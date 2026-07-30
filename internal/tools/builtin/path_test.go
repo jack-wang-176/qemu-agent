@@ -31,7 +31,10 @@ func TestReadToolTruncatesLines(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if !strings.Contains(result, "truncated after 2 lines") {
-		t.Fatalf("result = %q", result)
+	if !strings.Contains(result.ModelOutput, "truncated after 2 lines") {
+		t.Fatalf("result = %#v", result)
+	}
+	if result.PersistentOutput != result.ModelOutput {
+		t.Fatalf("read must persist what the model saw: %#v", result)
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/jack-wang-176/qemu-agent/internal/channel"
 	"github.com/jack-wang-176/qemu-agent/internal/contextmgr"
 	"github.com/jack-wang-176/qemu-agent/internal/llm"
+	"github.com/jack-wang-176/qemu-agent/internal/memory"
 	"github.com/jack-wang-176/qemu-agent/internal/runstream"
 	"github.com/jack-wang-176/qemu-agent/internal/session"
 )
@@ -89,6 +90,12 @@ func (m testContextManager) EnforceBudget(_ context.Context, _ contextmgr.ModelB
 
 func newTestApplication(t *testing.T) (*Application, *recordingRunner, *session.Registry) {
 	t.Helper()
+	application, runner, registry, _ := newTestApplicationWithKnowledge(t, &stubExtractor{})
+	return application, runner, registry
+}
+
+func newTestApplicationWithKnowledge(t *testing.T, extractor memory.Extractor) (*Application, *recordingRunner, *session.Registry, *recordingCandidates) {
+	t.Helper()
 	runner := &recordingRunner{}
 	store := &memoryStore{sessions: make(map[string]*session.Session)}
 	factory, err := session.NewDefaultFactory(session.Defaults{ModelRef: llm.ModelRef{Provider: "ollama", Model: "test-model"}, SystemPrompt: "system"}, func() string { return "generated-trace" })
@@ -99,25 +106,27 @@ func newTestApplication(t *testing.T) (*Application, *recordingRunner, *session.
 	if err != nil {
 		t.Fatal(err)
 	}
-	commands, err := NewCommandRouter(CommandDependencies{
-		Sessions: registry,
-		Updater:  registry,
-		Context:  testContextManager{},
-		Models:   newTestModels(t),
-	})
+	commands, err := NewCommandRouter(
+		testCommandDependencies(t, registry, testContextManager{}, newTestModels(t)),
+		CommandConfig{MemoryTopK: 3},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
+	candidates := &recordingCandidates{}
 	application, err := NewApplication(Dependencies{
-		Runner:   runner,
-		Sessions: registry,
-		Commands: commands,
-		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Runner:      runner,
+		Sessions:    registry,
+		Commands:    commands,
+		Extractor:   extractor,
+		Candidates:  candidates,
+		WorkspaceID: testWorkspaceID,
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return application, runner, registry
+	return application, runner, registry, candidates
 }
 
 func copySession(sess *session.Session) *session.Session {

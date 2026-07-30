@@ -3,6 +3,7 @@ module github.com/jack-wang-176/qemu-agent
 go 1.26.0
 
 require (
+	github.com/goccy/go-yaml v1.19.2
 	github.com/google/uuid v1.6.0
 	github.com/openai/openai-go/v3 v3.16.0
 	github.com/pkoukk/tiktoken-go v0.1.8

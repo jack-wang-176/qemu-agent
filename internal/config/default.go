@@ -40,6 +40,33 @@ const (
 	DefaultApprovalTimeout  = 5 * time.Minute
 	DefaultMaxAuditArgBytes = 16 * 1024
 	DefaultMaxAuditOutBytes = 16 * 1024
+
+	// Skill default
+	DefaultSkillsEnabled      = true
+	DefaultMaxSkills          = 128
+	DefaultMaxSkillFileBytes  = 256 * 1024
+	DefaultMaxSkillBodyBytes  = 192 * 1024
+	DefaultMaxSkillIndexBytes = 16 * 1024
+
+	// Memory default. Recall is on because a Store now exists and reading is
+	// harmless: nothing is written without an explicit /remember or an approved
+	// candidate. Auto-extraction stays off — it spends a model call on every turn
+	// and fills a review queue nobody asked for.
+	DefaultMemoryEnabled          = true
+	DefaultMemoryTopK             = 6
+	DefaultMemoryMaxItems         = 10000
+	DefaultMemoryMaxItemBytes     = 8 * 1024
+	DefaultMemoryMaxInjectedBytes = 24 * 1024
+	DefaultMemoryStrictSearch     = false
+	DefaultMemoryAutoExtract      = false
+	DefaultMemoryHalfLife         = 30 * 24 * time.Hour
+	DefaultCandidateTTL           = 7 * 24 * time.Hour
+
+	// Prompt default
+	DefaultPromptReservedTokens = 4096
+	DefaultPromptMaxBytes       = 40 * 1024
+	DefaultPromptMaxMemoryItems = DefaultMemoryTopK
+	MaxMemoryTopK               = 100
 )
 
 const DefaultToolTimeout = 60 * time.Second

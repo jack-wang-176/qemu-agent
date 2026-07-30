@@ -17,6 +17,12 @@ type Summary struct {
 	TelegramEnabled        bool
 	TelegramAllowedUsers   int
 	TelegramMaxConcurrency int
+	SkillsEnabled          bool
+	SkillsDir              string
+	MemoryEnabled          bool
+	MemoryDir              string
+	MemoryTopK             int
+	AutoExtract            bool
 }
 
 func (c Config) Summary() Summary {
@@ -36,5 +42,11 @@ func (c Config) Summary() Summary {
 		TelegramEnabled:        c.Channel.Telegram.Enabled,
 		TelegramAllowedUsers:   len(c.Channel.Telegram.AllowedUserIDs),
 		TelegramMaxConcurrency: c.Channel.Telegram.MaxConcurrency,
+		SkillsEnabled:          c.Skills.Enabled,
+		SkillsDir:              c.Skills.Dir,
+		MemoryEnabled:          c.Memory.Enabled,
+		MemoryDir:              c.Memory.Dir,
+		MemoryTopK:             c.Memory.TopK,
+		AutoExtract:            c.Memory.AutoExtract,
 	}
 }
