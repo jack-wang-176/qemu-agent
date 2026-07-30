@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/jack-wang-176/qemu-agent/internal/tools"
 	"github.com/jack-wang-176/qemu-agent/internal/tools/schema"
 )
 
@@ -35,26 +36,26 @@ func (wt *WriteTool) Spec() schema.Spec {
 		schema.Required("content", schema.String("The content to write into the file")),
 	))
 }
-func (wt *WriteTool) Execute(ctx context.Context, args string) (string, error) {
+func (wt *WriteTool) Execute(ctx context.Context, args string) (tools.ExecutionResult, error) {
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return tools.ExecutionResult{}, err
 	}
 	var arg WriteToolParam
 	if err := json.Unmarshal([]byte(args), &arg); err != nil {
-		return "", fmt.Errorf("decode write args: %w", err)
+		return tools.ExecutionResult{}, fmt.Errorf("decode write args: %w", err)
 	}
 	if strings.TrimSpace(arg.FilePath) == "" {
-		return "", fmt.Errorf("file_path is required")
+		return tools.ExecutionResult{}, fmt.Errorf("file_path is required")
 	}
 	path, err := resolveWorkspacePath(wt.workspace, arg.FilePath)
 	if err != nil {
-		return "", err
+		return tools.ExecutionResult{}, err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return "", fmt.Errorf("create parent directory: %w", err)
+		return tools.ExecutionResult{}, fmt.Errorf("create parent directory: %w", err)
 	}
 	if err := os.WriteFile(path, []byte(arg.Content), 0644); err != nil {
-		return "", fmt.Errorf("write %q: %w", path, err)
+		return tools.ExecutionResult{}, fmt.Errorf("write %q: %w", path, err)
 	}
-	return fmt.Sprintf("File written successfully: %s", path), nil
+	return tools.SameOutput(fmt.Sprintf("File written successfully: %s", path)), nil
 }

@@ -79,10 +79,14 @@ type ModelCommands interface {
 }
 
 type CommandDependencies struct {
-	Sessions SessionCommands
-	Updater  SessionUpdater
-	Context  ContextCommands
-	Models   ModelCommands
+	Sessions   SessionCommands
+	Updater    SessionUpdater
+	Context    ContextCommands
+	Models     ModelCommands
+	Skills     SkillCommands
+	Memories   MemoryCommands
+	Candidates CandidateCommands
+	Now        func() time.Time
 }
 
 type CommandResult struct {
@@ -90,14 +94,25 @@ type CommandResult struct {
 	Action channel.Action
 }
 
-type CommandRouter struct {
-	sessions SessionCommands
-	updater  SessionUpdater
-	context  ContextCommands
-	models   ModelCommands
+type CommandConfig struct {
+	// MemoryTopK bounds /memory search. It is the same ceiling the request path
+	// uses, so a user browsing recall sees what the model would have seen.
+	MemoryTopK int
 }
 
-func NewCommandRouter(deps CommandDependencies) (*CommandRouter, error) {
+type CommandRouter struct {
+	sessions   SessionCommands
+	updater    SessionUpdater
+	context    ContextCommands
+	models     ModelCommands
+	skills     SkillCommands
+	memories   MemoryCommands
+	candidates CandidateCommands
+	memoryTopK int
+	now        func() time.Time
+}
+
+func NewCommandRouter(deps CommandDependencies, cfg CommandConfig) (*CommandRouter, error) {
 	if deps.Sessions == nil {
 		return nil, errors.New("command router sessions is nil")
 	}
@@ -110,17 +125,43 @@ func NewCommandRouter(deps CommandDependencies) (*CommandRouter, error) {
 	if deps.Models == nil {
 		return nil, errors.New("command router models is nil")
 	}
+	// The knowledge dependencies are always present; a disabled layer is an empty
+	// registry and memory.DisabledStore, so no command path is nil-checked.
+	if deps.Skills == nil {
+		return nil, errors.New("command router skills is nil")
+	}
+	if deps.Memories == nil {
+		return nil, errors.New("command router memories is nil")
+	}
+	if deps.Candidates == nil {
+		return nil, errors.New("command router candidates is nil")
+	}
+	if cfg.MemoryTopK <= 0 {
+		return nil, errors.New("command router memory top-k must be > 0")
+	}
+	if deps.Now == nil {
+		deps.Now = time.Now
+	}
 	return &CommandRouter{
-		sessions: deps.Sessions,
-		updater:  deps.Updater,
-		context:  deps.Context,
-		models:   deps.Models,
+		sessions:   deps.Sessions,
+		updater:    deps.Updater,
+		context:    deps.Context,
+		models:     deps.Models,
+		skills:     deps.Skills,
+		memories:   deps.Memories,
+		candidates: deps.Candidates,
+		memoryTopK: cfg.MemoryTopK,
+		now:        deps.Now,
 	}, nil
 }
 
-func (r *CommandRouter) Execute(ctx context.Context, sessionKey string, command Command) (CommandResult, error) {
+func (r *CommandRouter) Execute(ctx context.Context, cc CommandContext, command Command) (CommandResult, error) {
 	if err := ctx.Err(); err != nil {
 		return CommandResult{}, err
+	}
+	sessionKey := cc.SessionKey
+	if strings.TrimSpace(sessionKey) == "" {
+		return CommandResult{}, errors.New("command session key is empty")
 	}
 	switch command.Name {
 	case "help":
@@ -137,6 +178,9 @@ func (r *CommandRouter) Execute(ctx context.Context, sessionKey string, command 
 				"/history",
 				"/compact",
 				"/model [list|<alias|provider:model>]",
+				"/skills [list|show <name>]",
+				"/remember [--kind=<kind>] [--scope=<scope>] <text>",
+				"/memory list|search <text>|show <id>|forget <id>|pending|approve <id>|reject <id>",
 				"/exit",
 			}, "\n"),
 			Action: channel.ActionReply,
@@ -178,6 +222,12 @@ func (r *CommandRouter) Execute(ctx context.Context, sessionKey string, command 
 		return r.compact(ctx, sessionKey, command.Args)
 	case "model":
 		return r.model(ctx, sessionKey, command.Args)
+	case "skills":
+		return r.skillsCommand(ctx, command.Args)
+	case "remember":
+		return r.remember(ctx, cc, command.Args)
+	case "memory":
+		return r.memoryCommand(ctx, cc, command.Args)
 	case "exit":
 		if err := requireArgCount(command, 0, "/exit"); err != nil {
 			return CommandResult{}, err

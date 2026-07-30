@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -42,6 +43,10 @@ func (c Config) Validate() error {
 	}
 	if c.Tools.ReadMaxLines <= 0 {
 		return errors.New("read max lines must be > 0")
+	}
+	//skill, memory and prompt config validate
+	if err := c.validateKnowledge(); err != nil {
+		return err
 	}
 	// agent config validate
 	if strings.TrimSpace(c.Agent.Provider) == "" {
@@ -218,4 +223,96 @@ func validateBaseURL(name, raw string) error {
 		return fmt.Errorf("%s must use http or https", name)
 	}
 	return nil
+}
+
+// validateKnowledge checks the Skill, Memory and Prompt groups.
+// Directory and limit checks are conditional: a disabled capability only has
+// to be internally consistent, so an operator can start the agent without
+// creating any skill or memory directory.
+func (c Config) validateKnowledge() error {
+	if c.Skills.Enabled {
+		if strings.TrimSpace(c.Skills.Dir) == "" {
+			return errors.New("QEMU_AGENT_SKILLS_DIR is empty")
+		}
+		if !filepath.IsAbs(c.Skills.Dir) {
+			return fmt.Errorf("skills dir %q must be absolute", c.Skills.Dir)
+		}
+		if c.Skills.MaxSkills <= 0 {
+			return errors.New("QEMU_AGENT_SKILLS_MAX_COUNT must be > 0")
+		}
+		if c.Skills.MaxFileBytes <= 0 || c.Skills.MaxBodyBytes <= 0 || c.Skills.MaxIndexBytes <= 0 {
+			return errors.New("skill byte limits must be > 0")
+		}
+		if c.Skills.MaxBodyBytes > c.Skills.MaxFileBytes {
+			return errors.New("skill body limit must be <= skill file limit")
+		}
+		if err := requireDisjointDir("skills dir", c.Skills.Dir, "session dir", c.Paths.SessionDir); err != nil {
+			return err
+		}
+	}
+	if c.Memory.Enabled {
+		if strings.TrimSpace(c.Memory.Dir) == "" {
+			return errors.New("QEMU_AGENT_MEMORY_DIR is empty")
+		}
+		if !filepath.IsAbs(c.Memory.Dir) {
+			return fmt.Errorf("memory dir %q must be absolute", c.Memory.Dir)
+		}
+		if c.Memory.TopK < 1 || c.Memory.TopK > MaxMemoryTopK {
+			return fmt.Errorf("QEMU_AGENT_MEMORY_TOP_K must be between 1 and %d", MaxMemoryTopK)
+		}
+		if c.Memory.MaxItems <= 0 || c.Memory.MaxItemBytes <= 0 || c.Memory.MaxInjectedBytes <= 0 {
+			return errors.New("memory limits must be > 0")
+		}
+		if c.Memory.HalfLife <= 0 {
+			return errors.New("QEMU_AGENT_MEMORY_HALF_LIFE must be > 0")
+		}
+		if c.Memory.AutoExtract && c.Memory.CandidateTTL <= 0 {
+			return errors.New("QEMU_AGENT_MEMORY_CANDIDATE_TTL must be > 0 when auto extract is enabled")
+		}
+		if err := requireDisjointDir("memory dir", c.Memory.Dir, "session dir", c.Paths.SessionDir); err != nil {
+			return err
+		}
+		if c.Skills.Enabled {
+			if err := requireDisjointDir("memory dir", c.Memory.Dir, "skills dir", c.Skills.Dir); err != nil {
+				return err
+			}
+		}
+	}
+	if c.Prompt.ReservedContextTokens <= 0 {
+		return errors.New("QEMU_AGENT_PROMPT_RESERVED_TOKENS must be > 0")
+	}
+	if c.Prompt.MaxInjectedBytes <= 0 {
+		return errors.New("QEMU_AGENT_PROMPT_MAX_INJECTED_BYTES must be > 0")
+	}
+	if c.Prompt.MaxMemoryItems < 0 {
+		return errors.New("QEMU_AGENT_PROMPT_MAX_MEMORY_ITEMS must be >= 0")
+	}
+	if c.Memory.Enabled && c.Prompt.MaxMemoryItems > c.Memory.TopK {
+		return fmt.Errorf(
+			"QEMU_AGENT_PROMPT_MAX_MEMORY_ITEMS %d must be <= memory top-k %d",
+			c.Prompt.MaxMemoryItems, c.Memory.TopK,
+		)
+	}
+	return nil
+}
+
+// requireDisjointDir rejects two directories where one contains the other,
+// so generated files of one capability can never be scanned as data of another.
+func requireDisjointDir(nameA, dirA, nameB, dirB string) error {
+	if strings.TrimSpace(dirA) == "" || strings.TrimSpace(dirB) == "" {
+		return nil
+	}
+	left, right := filepath.Clean(dirA), filepath.Clean(dirB)
+	if contains(left, right) || contains(right, left) {
+		return fmt.Errorf("%s %q and %s %q must not overlap", nameA, left, nameB, right)
+	}
+	return nil
+}
+
+func contains(parent, child string) bool {
+	relative, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
 }

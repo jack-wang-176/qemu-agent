@@ -15,6 +15,7 @@ import (
 	"github.com/jack-wang-176/qemu-agent/internal/channel/telegram"
 	"github.com/jack-wang-176/qemu-agent/internal/config"
 	"github.com/jack-wang-176/qemu-agent/internal/llm"
+	"github.com/jack-wang-176/qemu-agent/internal/memory"
 	"github.com/jack-wang-176/qemu-agent/internal/obs"
 	"github.com/jack-wang-176/qemu-agent/internal/session"
 	"github.com/jack-wang-176/qemu-agent/internal/tools/security"
@@ -32,6 +33,17 @@ type CLIAdapters struct {
 	Input     io.Reader
 	Output    io.Writer
 	ErrOutput io.Writer
+}
+
+// memoryTopK is the recall ceiling shared by the loop and /memory search, so a
+// user browsing their notes sees the same window the model would have seen. The
+// config value is only validated when memory is enabled, so a disabled install
+// falls back to the default rather than to zero, which every consumer rejects.
+func memoryTopK(cfg config.Config) int {
+	if cfg.Memory.TopK > 0 {
+		return cfg.Memory.TopK
+	}
+	return config.DefaultMemoryTopK
 }
 
 func validateBuildInput(input BuildInput) error {
@@ -81,6 +93,16 @@ func Build(input BuildInput) (*Runtime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build tool manager: %w", err)
 	}
+	// Skills are scanned before the executor exists so a broken skill file or a
+	// skill requiring a tool this build does not register fails startup instead
+	// of a live turn.
+	skillRegistry, err := build.BuildSkillRegistry(input.Config.Skills)
+	if err != nil {
+		return nil, fmt.Errorf("build skill registry: %w", err)
+	}
+	if err := build.RegisterSkillTool(manager, skillRegistry, input.Config.Skills); err != nil {
+		return nil, fmt.Errorf("build skill tool: %w", err)
+	}
 	var consoleReader *bufio.Reader
 	var interactiveApprover security.Approver = security.DenyAllApprover{}
 	if input.Config.Channel.CLIEnabled {
@@ -126,12 +148,37 @@ func Build(input BuildInput) (*Runtime, error) {
 		return nil, fmt.Errorf("build context manager: %w", err)
 	}
 
-	commands, err := NewCommandRouter(CommandDependencies{
-		Sessions: registry,
-		Updater:  registry,
-		Context:  contextManager,
-		Models:   models,
+	// The knowledge layer is assembled once here. Everything it returns is
+	// non-nil even when memory is disabled, so neither the agent loop nor a
+	// command has to branch on configuration at request time.
+	var completer memory.Completer
+	if input.Config.Memory.Enabled && input.Config.Memory.AutoExtract {
+		providerCompleter, err := build.NewProviderCompleter(resolvedDefault, resolvedDefault.Definition.MaxOutput)
+		if err != nil {
+			return nil, fmt.Errorf("build extraction completer: %w", err)
+		}
+		completer = providerCompleter
+	}
+	knowledge, err := build.BuildKnowledge(build.KnowledgeInput{
+		Config:    input.Config,
+		Skills:    skillRegistry,
+		Completer: completer,
+		Logger:    logger,
+		NewID:     uuid.NewString,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("build knowledge layer: %w", err)
+	}
+
+	commands, err := NewCommandRouter(CommandDependencies{
+		Sessions:   registry,
+		Updater:    registry,
+		Context:    contextManager,
+		Models:     models,
+		Skills:     skillRegistry,
+		Memories:   knowledge.Store,
+		Candidates: knowledge.Candidates,
+	}, CommandConfig{MemoryTopK: memoryTopK(input.Config)})
 	if err != nil {
 		return nil, fmt.Errorf("build command router: %w", err)
 	}
@@ -143,12 +190,16 @@ func Build(input BuildInput) (*Runtime, error) {
 			Executor: executor,
 			Store:    store,
 			Context:  contextManager,
+			Prompts:  knowledge.Assembler,
 			Logger:   logger,
 			NewID:    uuid.NewString,
 		},
 		agent.Config{
-			MaxTurns: input.Config.Agent.MaxTurns,
-			Stream:   input.Config.Agent.Stream,
+			MaxTurns:             input.Config.Agent.MaxTurns,
+			Stream:               input.Config.Agent.Stream,
+			MemoryTopK:           memoryTopK(input.Config),
+			PromptReservedTokens: input.Config.Prompt.ReservedContextTokens,
+			PromptMaxBytes:       input.Config.Prompt.MaxInjectedBytes,
 		},
 	)
 	if err != nil {
@@ -156,10 +207,13 @@ func Build(input BuildInput) (*Runtime, error) {
 	}
 
 	application, err := NewApplication(Dependencies{
-		Runner:   runner,
-		Sessions: registry,
-		Commands: commands,
-		Logger:   logger,
+		Runner:      runner,
+		Sessions:    registry,
+		Commands:    commands,
+		Extractor:   knowledge.Extractor,
+		Candidates:  knowledge.Candidates,
+		WorkspaceID: knowledge.WorkspaceID,
+		Logger:      logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("build application: %w", err)
@@ -198,6 +252,8 @@ func Build(input BuildInput) (*Runtime, error) {
 	}
 
 	logger.Info("application built", "config", input.Config.Summary())
+	logger.Info("skills loaded", "enabled", input.Config.Skills.Enabled, "count", skillRegistry.Len())
+
 	runtime := &Runtime{
 		Application: application,
 		Logger:      logger,

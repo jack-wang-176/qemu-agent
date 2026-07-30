@@ -32,6 +32,10 @@ type AuditEvent struct {
 	Error        string    `json:"error,omitempty"`
 	StartedAt    time.Time `json:"started_at"`
 	FinishedAt   time.Time `json:"finished_at"`
+	// ProjectionChanged marks the calls whose persisted text differs from the
+	// model-visible output; PersistentOutput then records what the session kept.
+	ProjectionChanged bool   `json:"persistent_projection_changed,omitempty"`
+	PersistentOutput  string `json:"persistent_output,omitempty"`
 }
 
 type Redactor interface {

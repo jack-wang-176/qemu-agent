@@ -19,6 +19,9 @@ type Config struct {
 	Models    ModelConfig
 	Channel   ChannelConfig
 	Security  SecurityConfig
+	Skills    SkillConfig
+	Memory    MemoryConfig
+	Prompt    PromptConfig
 }
 
 type AgentConfig struct {
@@ -105,6 +108,34 @@ type ModelDefinitionConfig struct {
 	MaxOutput   int      `json:"max_output"`
 	Tools       bool     `json:"tools"`
 	Streaming   bool     `json:"streaming"`
+}
+
+type SkillConfig struct {
+	Enabled       bool
+	Dir           string
+	MaxSkills     int
+	MaxFileBytes  int
+	MaxBodyBytes  int
+	MaxIndexBytes int
+}
+
+type MemoryConfig struct {
+	Enabled          bool
+	Dir              string
+	TopK             int
+	MaxItems         int
+	MaxItemBytes     int
+	MaxInjectedBytes int
+	HalfLife         time.Duration
+	StrictSearch     bool
+	AutoExtract      bool
+	CandidateTTL     time.Duration
+}
+
+type PromptConfig struct {
+	ReservedContextTokens int
+	MaxInjectedBytes      int
+	MaxMemoryItems        int
 }
 
 func LoadFromOS(overrides Overrides) (Config, error) {

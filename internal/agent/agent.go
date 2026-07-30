@@ -12,6 +12,7 @@ import (
 
 	"github.com/jack-wang-176/qemu-agent/internal/contextmgr"
 	"github.com/jack-wang-176/qemu-agent/internal/llm"
+	"github.com/jack-wang-176/qemu-agent/internal/prompt"
 	"github.com/jack-wang-176/qemu-agent/internal/runstream"
 	"github.com/jack-wang-176/qemu-agent/internal/session"
 	"github.com/jack-wang-176/qemu-agent/internal/tools/security"
@@ -21,6 +22,15 @@ import (
 type Config struct {
 	MaxTurns int
 	Stream   bool
+	// MemoryTopK is how many memories one request may ask for. The assembler
+	// clamps it again, so this is the caller-facing ceiling, not the only one.
+	MemoryTopK int
+	// PromptReservedTokens is the room kept free for the request-scoped overlay.
+	// It is subtracted from the history budget, never added to MaxContext, so a
+	// larger overlay compacts history instead of overflowing the model.
+	PromptReservedTokens int
+	// PromptMaxBytes bounds the rendered overlay. Zero defers to the assembler.
+	PromptMaxBytes int
 }
 
 type ToolCatalog interface {
@@ -35,6 +45,14 @@ type ContextManager interface {
 	EnforceBudget(ctx context.Context, budget contextmgr.ModelBudget, msgs []llm.Message) ([]llm.Message, int, error)
 }
 
+// PromptAssembler produces the request-scoped view of the transcript. Prepare
+// runs once per request (retrieval), Build runs once per turn (rendering); the
+// split is what keeps a multi-turn run from re-ranking memories between turns.
+type PromptAssembler interface {
+	Prepare(context.Context, prompt.ContextQuery) (prompt.Snapshot, error)
+	Build(context.Context, prompt.Input) (prompt.Plan, error)
+}
+
 // Dependencies contains runtime capabilities required by Agent.
 type Dependencies struct {
 	Models   llm.ModelResolver
@@ -42,22 +60,27 @@ type Dependencies struct {
 	Executor SecureToolExecutor
 	Store    session.Store
 	Context  ContextManager
+	Prompts  PromptAssembler
 	Logger   *slog.Logger
 	NewID    func() string
 	Now      func() time.Time
 }
 
 type Agent struct {
-	models   llm.ModelResolver
-	catalog  ToolCatalog
-	executor SecureToolExecutor
-	ctxmgr   ContextManager
-	store    session.Store
-	maxTurns int
-	stream   bool
-	logger   *slog.Logger
-	newID    func() string
-	now      func() time.Time
+	models         llm.ModelResolver
+	catalog        ToolCatalog
+	executor       SecureToolExecutor
+	ctxmgr         ContextManager
+	prompts        PromptAssembler
+	store          session.Store
+	maxTurns       int
+	stream         bool
+	memoryTopK     int
+	reservedTokens int
+	promptBytes    int
+	logger         *slog.Logger
+	newID          func() string
+	now            func() time.Time
 }
 
 func New(deps Dependencies, cfg Config) (*Agent, error) {
@@ -76,11 +99,20 @@ func New(deps Dependencies, cfg Config) (*Agent, error) {
 	if deps.Context == nil {
 		return nil, errors.New("context manager is nil")
 	}
+	// A disabled knowledge layer is expressed as prompt.NopAssembler, never as a
+	// nil field: an optional dependency that has to be nil-checked on the hot
+	// path is one forgotten check away from a panic mid-run.
+	if deps.Prompts == nil {
+		return nil, errors.New("prompt assembler is nil")
+	}
 	if deps.Logger == nil {
 		return nil, errors.New("logger is nil")
 	}
 	if cfg.MaxTurns <= 0 {
 		return nil, errors.New("max turns must be positive")
+	}
+	if cfg.MemoryTopK < 0 || cfg.PromptReservedTokens < 0 || cfg.PromptMaxBytes < 0 {
+		return nil, errors.New("prompt limits must be >= 0")
 	}
 	if deps.NewID == nil {
 		return nil, errors.New("invocation id generator is nil")
@@ -90,16 +122,20 @@ func New(deps Dependencies, cfg Config) (*Agent, error) {
 	}
 
 	return &Agent{
-		models:   deps.Models,
-		catalog:  deps.Catalog,
-		executor: deps.Executor,
-		store:    deps.Store,
-		ctxmgr:   deps.Context,
-		maxTurns: cfg.MaxTurns,
-		stream:   cfg.Stream,
-		logger:   deps.Logger,
-		newID:    deps.NewID,
-		now:      deps.Now,
+		models:         deps.Models,
+		catalog:        deps.Catalog,
+		executor:       deps.Executor,
+		store:          deps.Store,
+		ctxmgr:         deps.Context,
+		prompts:        deps.Prompts,
+		maxTurns:       cfg.MaxTurns,
+		stream:         cfg.Stream,
+		memoryTopK:     cfg.MemoryTopK,
+		reservedTokens: cfg.PromptReservedTokens,
+		promptBytes:    cfg.PromptMaxBytes,
+		logger:         deps.Logger,
+		newID:          deps.NewID,
+		now:            deps.Now,
 	}, nil
 }
 
