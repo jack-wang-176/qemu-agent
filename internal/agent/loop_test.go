@@ -11,6 +11,7 @@ import (
 
 	"github.com/jack-wang-176/qemu-agent/internal/contextmgr"
 	"github.com/jack-wang-176/qemu-agent/internal/llm"
+	"github.com/jack-wang-176/qemu-agent/internal/prompt"
 	"github.com/jack-wang-176/qemu-agent/internal/runstream"
 	"github.com/jack-wang-176/qemu-agent/internal/session"
 	"github.com/jack-wang-176/qemu-agent/internal/tools/security"
@@ -94,9 +95,10 @@ func newAgentForTest(t *testing.T, provider llm.Provider, executor SecureToolExe
 	value, err := New(Dependencies{
 		Models:  agentTestModels{resolved: llm.ResolvedModel{Definition: llm.ModelDefinition{Ref: ref, MaxContext: 4096, MaxOutput: 128, Tools: true}, Provider: provider}},
 		Catalog: agentTestCatalog{schemas: []llm.ToolSchema{{Name: "read"}}}, Executor: executor,
-		Store: store, Context: agentTestContext{}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		NewID: func() string { return "invocation" }, Now: func() time.Time { return time.Unix(1, 0) },
-	}, Config{MaxTurns: 4})
+		Store: store, Context: agentTestContext{}, Prompts: prompt.NopAssembler{},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		NewID:  func() string { return "invocation" }, Now: func() time.Time { return time.Unix(1, 0) },
+	}, Config{MaxTurns: 4, MemoryTopK: 4, PromptReservedTokens: 256})
 	if err != nil {
 		t.Fatal(err)
 	}

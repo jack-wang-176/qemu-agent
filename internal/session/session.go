@@ -113,6 +113,43 @@ func (s *Session) MessageCopy() []llm.Message {
 	return cloneMessages(s.Messages)
 }
 
+// ErrToolResultNotFound reports that no tool message carries the given call id.
+// Compaction may legitimately drop old tool messages, so callers decide whether
+// a missing target is fatal.
+var ErrToolResultNotFound = errors.New("tool result not found")
+
+// ReplaceToolResult rewrites the persisted text of one tool message. It is the
+// only supported way to store a projection of a tool result: the message must
+// exist exactly once, so a projection can never create, delete or duplicate a
+// tool message and break the assistant/tool pairing the provider requires.
+func (s *Session) ReplaceToolResult(callID, content string) error {
+	if s == nil {
+		return errors.New("session is nil")
+	}
+	if callID == "" {
+		return errors.New("tool call id is empty")
+	}
+	if content == "" {
+		return errors.New("tool result content is empty")
+	}
+	found := -1
+	for index, message := range s.Messages {
+		if message.Role != llm.RoleTool || message.ToolCallID != callID {
+			continue
+		}
+		if found >= 0 {
+			return fmt.Errorf("duplicate tool result for call %q", callID)
+		}
+		found = index
+	}
+	if found < 0 {
+		return fmt.Errorf("%w: call %q", ErrToolResultNotFound, callID)
+	}
+	s.Messages[found].Content = content
+	s.touch()
+	return nil
+}
+
 func (s *Session) MessageReplace(msgs []llm.Message, usage int) {
 	s.Messages = cloneMessages(msgs)
 	s.TokenUsage = usage
