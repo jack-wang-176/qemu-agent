@@ -41,6 +41,7 @@ func validBuildConfig(t *testing.T) config.Config {
 		Providers: config.ProviderConfig{Ollama: config.APIConfig{BaseURL: config.DefaultOllamaBaseURL}},
 		Channel:   config.ChannelConfig{CLIEnabled: true, CLISessionKey: config.DefaultCLISessionKey, CLIPrompt: config.DefaultCLIPrompt, MaxInputBytes: config.DefaultMaxInputBytes},
 		Security:  config.SecurityConfig{Mode: config.DefaultSecurityMode, AuditPath: t.TempDir() + "/tools.jsonl", ApprovalTimeout: config.DefaultApprovalTimeout, MaxAuditArgBytes: config.DefaultMaxAuditArgBytes, MaxAuditOutBytes: config.DefaultMaxAuditOutBytes},
+		Prompt:    config.PromptConfig{ReservedContextTokens: config.DefaultPromptReservedTokens, MaxInjectedBytes: config.DefaultPromptMaxBytes, MaxMemoryItems: config.DefaultPromptMaxMemoryItems},
 	}
 }
 
