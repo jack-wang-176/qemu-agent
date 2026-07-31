@@ -55,6 +55,15 @@ func Build(input BuildInput) (*Runtime, error) {
 		return nil, fmt.Errorf("build context manager: %w", err)
 	}
 
+	commands, err := NewCommandRouter(CommandDependencies{
+		Sessions: registry,
+		Updater:  registry,
+		Context:  contextManager,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("build command router: %w", err)
+	}
+
 	runner, err := agent.New(
 		agent.Dependencies{
 			Provider: provider,
@@ -75,6 +84,7 @@ func Build(input BuildInput) (*Runtime, error) {
 	application, err := NewApplication(Dependencies{
 		Runner:   runner,
 		Sessions: registry,
+		Commands: commands,
 		Logger:   logger,
 	})
 	if err != nil {

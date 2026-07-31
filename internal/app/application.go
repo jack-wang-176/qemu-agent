@@ -18,13 +18,19 @@ type Runner interface {
 type Application struct {
 	runner   Runner
 	sessions SessionRegistry
+	commands CommandHandler
 	logger   *slog.Logger
 }
 
 type Dependencies struct {
 	Runner   Runner
 	Sessions SessionRegistry
+	Commands CommandHandler
 	Logger   *slog.Logger
+}
+
+type CommandHandler interface {
+	Execute(context.Context, string, Command) (CommandResult, error)
 }
 
 type SessionRegistry interface {
@@ -39,6 +45,9 @@ func NewApplication(deps Dependencies) (*Application, error) {
 	if deps.Sessions == nil {
 		return nil, errors.New("application session registry is nil")
 	}
+	if deps.Commands == nil {
+		return nil, errors.New("application command handler is nil")
+	}
 	if deps.Logger == nil {
 		return nil, errors.New("application logger is nil")
 	}
@@ -46,6 +55,7 @@ func NewApplication(deps Dependencies) (*Application, error) {
 	return &Application{
 		runner:   deps.Runner,
 		sessions: deps.Sessions,
+		commands: deps.Commands,
 		logger:   deps.Logger,
 	}, nil
 }
@@ -62,8 +72,14 @@ func (a *Application) RunOnce(ctx context.Context, traceID string, input string)
 		return "", errors.New("input is empty")
 	}
 	key := "oneshot:" + traceID
-	if _, err := a.sessions.NewWithTrace(ctx, key, traceID); err != nil {
-		return "", fmt.Errorf("create one-shot session: %w", err)
+	_, isCommand, err := ParseCommand(input)
+	if err != nil {
+		return "", err
+	}
+	if !isCommand {
+		if _, err := a.sessions.NewWithTrace(ctx, key, traceID); err != nil {
+			return "", fmt.Errorf("create one-shot session: %w", err)
+		}
 	}
 	a.logger.DebugContext(ctx, "run one-shot session", "session_key", key, "trace_id", traceID)
 	out, err := a.Handle(ctx, channel.Inbound{Channel: "cli", SessionKey: key, Text: input})
@@ -78,9 +94,24 @@ func (a *Application) Handle(ctx context.Context, in channel.Inbound) (channel.O
 	if err := validateInbound(in); err != nil {
 		return channel.Outbound{}, err
 	}
+	command, isCommand, err := ParseCommand(in.Text)
+	if err != nil {
+		return channel.Outbound{}, err
+	}
+	if isCommand {
+		result, err := a.commands.Execute(ctx, in.SessionKey, command)
+		if err != nil {
+			return channel.Outbound{}, err
+		}
+		return channel.Outbound{
+			SessionKey: in.SessionKey,
+			Text:       result.Text,
+			Action:     result.Action,
+		}, nil
+	}
 	var answer string
 	//inject session and run
-	err := a.sessions.WithSession(ctx, in.SessionKey, func(sess *session.Session) error {
+	err = a.sessions.WithSession(ctx, in.SessionKey, func(sess *session.Session) error {
 		result, err := a.runner.Run(ctx, sess, in.Text)
 		answer = result
 		return err
