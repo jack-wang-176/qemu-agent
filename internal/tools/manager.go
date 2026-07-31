@@ -7,17 +7,28 @@ import (
 	"github.com/jack-wang-176/qemu-agent/internal/llm"
 )
 
-type Catalog interface {
-	Schema() []llm.ToolSchema
-	Lookup(name string) (Tool, bool)
-}
-
 type RegisterTool struct {
 	Tool   Tool
 	Schema llm.ToolSchema
 }
 type Manager struct {
 	tools map[string]RegisterTool
+}
+
+func (m *Manager) Has(name string) bool {
+	_, ok := m.tools[name]
+	return ok
+}
+
+// Names returns the registered tool names in sorted order. Skill validation
+// and the startup summary both need a stable list.
+func (m *Manager) Names() []string {
+	names := make([]string, 0, len(m.tools))
+	for name := range m.tools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func NewManager() *Manager {

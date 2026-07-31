@@ -10,15 +10,18 @@ import (
 	"github.com/jack-wang-176/qemu-agent/internal/tools/schema"
 )
 
-type fakeTool struct{ calls int }
+type fakeTool struct {
+	calls      int
+	persistent string
+}
 
 func (*fakeTool) Name() string        { return "fake" }
 func (*fakeTool) Description() string { return "fake" }
 func (*fakeTool) Spec() schema.Spec   { return schema.Spec{Name: "fake"} }
 func (*fakeTool) Dangerous() bool     { return false }
-func (t *fakeTool) Execute(context.Context, string) (string, error) {
+func (t *fakeTool) Execute(context.Context, string) (tools.ExecutionResult, error) {
 	t.calls++
-	return "token=abc", nil
+	return tools.ExecutionResult{ModelOutput: "token=abc", PersistentOutput: t.persistent}, nil
 }
 
 type fakeCatalog struct{ tool tools.Tool }
@@ -83,5 +86,36 @@ func TestExecutorPreAuditFailureIsFailClosed(t *testing.T) {
 	_, err := executor.Execute(context.Background(), testInvocation())
 	if err == nil || tool.calls != 0 {
 		t.Fatalf("err=%v calls=%d", err, tool.calls)
+	}
+}
+
+func TestExecutorDefaultsPersistentOutputToModelOutput(t *testing.T) {
+	audit := &memoryAudit{}
+	executor, _ := newTestExecutor(t, DecisionAllow, audit)
+	result, err := executor.Execute(context.Background(), testInvocation())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.PersistentOutput != result.Output || result.ProjectionChanged() {
+		t.Fatalf("result=%#v", result)
+	}
+	if audit.events[1].ProjectionChanged || audit.events[1].PersistentOutput != "" {
+		t.Fatalf("audit=%#v", audit.events[1])
+	}
+}
+
+func TestExecutorRecordsProjectionInAudit(t *testing.T) {
+	audit := &memoryAudit{}
+	executor, tool := newTestExecutor(t, DecisionAllow, audit)
+	tool.persistent = "receipt"
+	result, err := executor.Execute(context.Background(), testInvocation())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.PersistentOutput != "receipt" || !result.ProjectionChanged() {
+		t.Fatalf("result=%#v", result)
+	}
+	if !audit.events[1].ProjectionChanged || audit.events[1].PersistentOutput != "receipt" {
+		t.Fatalf("audit=%#v", audit.events[1])
 	}
 }
