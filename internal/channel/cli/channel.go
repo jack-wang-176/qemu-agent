@@ -82,7 +82,8 @@ func (c *CLI) Run(ctx context.Context, handler channel.Handler) error {
 				Channel:    c.Name(),
 				Text:       line,
 			},
-			Events: requestRenderer,
+			Capabilities: channel.Capabilities{InteractiveApproval: true},
+			Events:       requestRenderer,
 		})
 		finishErr := requestRenderer.Finish(ctx)
 		err = errors.Join(handleErr, finishErr)

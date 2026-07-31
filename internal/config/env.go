@@ -84,6 +84,27 @@ func envDuration(lookup LookupEnv, key string, fallback time.Duration) (time.Dur
 	return value, nil
 }
 
+func envInt64List(lookup LookupEnv, key string) ([]int64, error) {
+	raw, ok := lookup(key)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	seen := make(map[int64]struct{})
+	result := make([]int64, 0)
+	for _, part := range strings.Split(raw, ",") {
+		value, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64)
+		if err != nil || value <= 0 {
+			return nil, fmt.Errorf("parse %s user id %q as positive integer", key, part)
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result, nil
+}
+
 func resolveDataDir(lookup LookupEnv) (string, error) {
 	if value := envString(lookup, "QEMU_AGENT_DATA_DIR", ""); value != "" {
 		/* insurance the file path is absolute path. */
@@ -169,6 +190,50 @@ func LoadEnv(lookup LookupEnv) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	cliEnabled, err := envBool(lookup, "QEMU_AGENT_CLI_ENABLED", true)
+	if err != nil {
+		return Config{}, err
+	}
+	telegramEnabled, err := envBool(lookup, "QEMU_AGENT_TELEGRAM_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+	allowedUserIDs, err := envInt64List(lookup, "QEMU_AGENT_TELEGRAM_ALLOWED_USER_IDS")
+	if err != nil {
+		return Config{}, err
+	}
+	allowGroups, err := envBool(lookup, "QEMU_AGENT_TELEGRAM_ALLOW_GROUP_CHATS", false)
+	if err != nil {
+		return Config{}, err
+	}
+	pollTimeout, err := envDuration(lookup, "QEMU_AGENT_TELEGRAM_POLL_TIMEOUT", DefaultTelegramPollTimeout)
+	if err != nil {
+		return Config{}, err
+	}
+	retryMin, err := envDuration(lookup, "QEMU_AGENT_TELEGRAM_RETRY_MIN_BACKOFF", DefaultTelegramRetryMinBackoff)
+	if err != nil {
+		return Config{}, err
+	}
+	retryMax, err := envDuration(lookup, "QEMU_AGENT_TELEGRAM_RETRY_MAX_BACKOFF", DefaultTelegramRetryMaxBackoff)
+	if err != nil {
+		return Config{}, err
+	}
+	telegramConcurrency, err := envInt(lookup, "QEMU_AGENT_TELEGRAM_MAX_CONCURRENCY", DefaultTelegramMaxConcurrency)
+	if err != nil {
+		return Config{}, err
+	}
+	telegramMaxInput, err := envInt(lookup, "QEMU_AGENT_TELEGRAM_MAX_INPUT_BYTES", DefaultTelegramMaxInputBytes)
+	if err != nil {
+		return Config{}, err
+	}
+	editInterval, err := envDuration(lookup, "QEMU_AGENT_TELEGRAM_EDIT_INTERVAL", DefaultTelegramEditInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	chunkSize, err := envInt(lookup, "QEMU_AGENT_TELEGRAM_MESSAGE_CHUNK_SIZE", DefaultTelegramMessageChunkSize)
+	if err != nil {
+		return Config{}, err
+	}
 
 	//workspace and data direction read
 	dataDir, err := resolveDataDir(lookup)
@@ -250,9 +315,17 @@ func LoadEnv(lookup LookupEnv) (Config, error) {
 		},
 		Models: ModelConfig{Definitions: definitions, CompatibilityGenerated: func() bool { raw, ok := lookup("QEMU_AGENT_MODELS_JSON"); return !ok || strings.TrimSpace(raw) == "" }()},
 		Channel: ChannelConfig{
+			CLIEnabled:    cliEnabled,
 			CLISessionKey: envString(lookup, "QEMU_AGENT_CLI_SESSION_KEY", DefaultCLISessionKey),
 			CLIPrompt:     envString(lookup, "QEMU_AGENT_CLI_PROMPT", DefaultCLIPrompt),
 			MaxInputBytes: maxInputBytes,
+			Telegram: TelegramConfig{
+				Enabled: telegramEnabled, Token: envString(lookup, "QEMU_AGENT_TELEGRAM_TOKEN", ""),
+				AllowedUserIDs: allowedUserIDs, AllowGroupChats: allowGroups,
+				PollTimeout: pollTimeout, RetryMinBackoff: retryMin, RetryMaxBackoff: retryMax,
+				MaxConcurrency: telegramConcurrency, MaxInputBytes: telegramMaxInput,
+				EditInterval: editInterval, MessageChunkSize: chunkSize,
+			},
 		},
 		Security: SecurityConfig{
 			Mode:             envString(lookup, "QEMU_AGENT_TOOL_SECURITY_MODE", DefaultSecurityMode),

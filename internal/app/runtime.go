@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 
 	"github.com/jack-wang-176/qemu-agent/internal/channel"
@@ -20,8 +21,13 @@ type Runtime struct {
 	closeErr    error
 }
 
-// Run starts the configured channel. I2 intentionally supports one channel;
-// multi-channel coordination is introduced when another transport is added.
+type channelResult struct {
+	name string
+	err  error
+}
+
+// Run supervises all configured channels. A normal channel stop does not stop
+// siblings; the first fatal error cancels the shared child context.
 func (r *Runtime) Run(ctx context.Context) error {
 	if r == nil {
 		return errors.New("runtime is nil")
@@ -32,28 +38,57 @@ func (r *Runtime) Run(ctx context.Context) error {
 	if r.Logger == nil {
 		return errors.New("runtime logger is nil")
 	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	switch len(r.Channels) {
-	case 0:
+	if len(r.Channels) == 0 {
 		return errors.New("runtime has no channels")
-	case 1:
-	default:
-		return fmt.Errorf("runtime supports one channel, got %d", len(r.Channels))
 	}
-	selected := r.Channels[0]
-	if selected == nil {
-		return errors.New("runtime channel is nil")
-	}
-	r.Logger.InfoContext(ctx, "channel started", "channel", selected.Name())
-	if err := selected.Run(ctx, r.Application); err != nil {
-		if errors.Is(err, context.Canceled) && ctx.Err() != nil {
-			return nil
+	names := make(map[string]struct{}, len(r.Channels))
+	for index, item := range r.Channels {
+		if item == nil {
+			return fmt.Errorf("runtime channel %d is nil", index)
 		}
-		return fmt.Errorf("run %s channel: %w", selected.Name(), err)
+		name := strings.TrimSpace(item.Name())
+		if name == "" {
+			return fmt.Errorf("runtime channel %d name is empty", index)
+		}
+		if _, exists := names[name]; exists {
+			return fmt.Errorf("runtime channel name %q is duplicated", name)
+		}
+		names[name] = struct{}{}
 	}
-	return nil
+	if ctx.Err() != nil {
+		return nil
+	}
+
+	childCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	results := make(chan channelResult, len(r.Channels))
+	for _, item := range r.Channels {
+		go r.runChannel(childCtx, item, results)
+	}
+
+	var fatal error
+	for range r.Channels {
+		result := <-results
+		if result.err == nil || (errors.Is(result.err, context.Canceled) && childCtx.Err() != nil) {
+			continue
+		}
+		fatal = errors.Join(fatal, fmt.Errorf("run %s channel: %w", result.name, result.err))
+		cancel()
+	}
+	return fatal
+}
+
+func (r *Runtime) runChannel(ctx context.Context, item channel.Channel, results chan<- channelResult) {
+	name := item.Name()
+	r.Logger.InfoContext(ctx, "channel started", "channel", name)
+	result := channelResult{name: name}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			result.err = fmt.Errorf("panic: %v", recovered)
+		}
+		results <- result
+	}()
+	result.err = item.Run(ctx, r.Application)
 }
 
 func (r *Runtime) Close() error {

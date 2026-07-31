@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 
 	"github.com/google/uuid"
 	"github.com/jack-wang-176/qemu-agent/internal/agent"
 	"github.com/jack-wang-176/qemu-agent/internal/app/build"
 	"github.com/jack-wang-176/qemu-agent/internal/channel"
 	"github.com/jack-wang-176/qemu-agent/internal/channel/cli"
+	"github.com/jack-wang-176/qemu-agent/internal/channel/telegram"
 	"github.com/jack-wang-176/qemu-agent/internal/config"
 	"github.com/jack-wang-176/qemu-agent/internal/llm"
 	"github.com/jack-wang-176/qemu-agent/internal/obs"
@@ -23,6 +25,7 @@ type BuildInput struct {
 	SystemPrompt string
 	LogOutput    io.Writer
 	CLI          CLIAdapters
+	HTTPClient   *http.Client
 }
 
 type CLIAdapters struct {
@@ -35,13 +38,13 @@ func validateBuildInput(input BuildInput) error {
 	if input.LogOutput == nil {
 		return errors.New("build log output is nil")
 	}
-	if input.CLI.Input == nil {
+	if input.Config.Channel.CLIEnabled && input.CLI.Input == nil {
 		return errors.New("build CLI input is nil")
 	}
-	if input.CLI.Output == nil {
+	if input.Config.Channel.CLIEnabled && input.CLI.Output == nil {
 		return errors.New("build CLI output is nil")
 	}
-	if input.CLI.ErrOutput == nil {
+	if input.Config.Channel.CLIEnabled && input.CLI.ErrOutput == nil {
 		return errors.New("build CLI error output is nil")
 	}
 	return input.Config.Validate()
@@ -78,10 +81,15 @@ func Build(input BuildInput) (*Runtime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build tool manager: %w", err)
 	}
-	consoleReader := bufio.NewReader(input.CLI.Input)
-	cliApprover, err := security.NewCLIApprover(consoleReader, input.CLI.ErrOutput)
-	if err != nil {
-		return nil, fmt.Errorf("build CLI approver: %w", err)
+	var consoleReader *bufio.Reader
+	var interactiveApprover security.Approver = security.DenyAllApprover{}
+	if input.Config.Channel.CLIEnabled {
+		consoleReader = bufio.NewReader(input.CLI.Input)
+		cliApprover, err := security.NewCLIApprover(consoleReader, input.CLI.ErrOutput)
+		if err != nil {
+			return nil, fmt.Errorf("build CLI approver: %w", err)
+		}
+		interactiveApprover = cliApprover
 	}
 	bashAnalyzer, err := security.NewConservativeBashAnalyzer(input.Config.Security.Mode)
 	if err != nil {
@@ -105,7 +113,7 @@ func Build(input BuildInput) (*Runtime, error) {
 			_ = auditSink.Close()
 		}
 	}()
-	executor, err := security.NewExecutor(security.ExecutorDependencies{Catalog: manager, Policy: policy, Approver: security.RoutingApprover{Interactive: cliApprover, Fallback: security.DenyAllApprover{}}, Audit: auditSink, Redactor: redactor}, input.Config.Security.ApprovalTimeout)
+	executor, err := security.NewExecutor(security.ExecutorDependencies{Catalog: manager, Policy: policy, Approver: security.RoutingApprover{Interactive: interactiveApprover, Fallback: security.DenyAllApprover{}}, Audit: auditSink, Redactor: redactor}, input.Config.Security.ApprovalTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("build secure tool executor: %w", err)
 	}
@@ -157,27 +165,43 @@ func Build(input BuildInput) (*Runtime, error) {
 		return nil, fmt.Errorf("build application: %w", err)
 	}
 
-	cliChannel, err := cli.NewCLI(cli.Dependencies{
-		Input:     consoleReader,
-		Output:    input.CLI.Output,
-		ErrOutput: input.CLI.ErrOutput,
-		Renderer:  cli.NewTextRenderer(),
-		Events:    cli.NewTextRenderer(),
-		Logger:    logger,
-	}, cli.Config{
-		Prompt:        input.Config.Channel.CLIPrompt,
-		SessionKey:    input.Config.Channel.CLISessionKey,
-		MaxInputBytes: input.Config.Channel.MaxInputBytes,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("build CLI channel: %w", err)
+	channels := make([]channel.Channel, 0, 2)
+	if input.Config.Channel.CLIEnabled {
+		cliChannel, err := cli.NewCLI(cli.Dependencies{
+			Input: consoleReader, Output: input.CLI.Output, ErrOutput: input.CLI.ErrOutput,
+			Renderer: cli.NewTextRenderer(), Events: cli.NewTextRenderer(), Logger: logger,
+		}, cli.Config{Prompt: input.Config.Channel.CLIPrompt, SessionKey: input.Config.Channel.CLISessionKey, MaxInputBytes: input.Config.Channel.MaxInputBytes})
+		if err != nil {
+			return nil, fmt.Errorf("build CLI channel: %w", err)
+		}
+		channels = append(channels, cliChannel)
+	}
+	if input.Config.Channel.Telegram.Enabled {
+		tgCfg := input.Config.Channel.Telegram
+		client, err := telegram.NewHTTPClient(tgCfg.Token, input.HTTPClient)
+		if err != nil {
+			return nil, fmt.Errorf("build Telegram client: %w", err)
+		}
+		factory, err := telegram.NewEventSinkFactory(client, telegram.SinkConfig{EditInterval: tgCfg.EditInterval, ChunkSize: tgCfg.MessageChunkSize})
+		if err != nil {
+			return nil, fmt.Errorf("build Telegram event sink: %w", err)
+		}
+		tgChannel, err := telegram.New(telegram.Dependencies{Client: client, Events: factory, Logger: logger}, telegram.Config{
+			AllowedUserIDs: tgCfg.AllowedUserIDs, AllowGroupChats: tgCfg.AllowGroupChats,
+			PollTimeout: tgCfg.PollTimeout, RetryMinBackoff: tgCfg.RetryMinBackoff, RetryMaxBackoff: tgCfg.RetryMaxBackoff,
+			MaxConcurrency: tgCfg.MaxConcurrency, MaxInputBytes: tgCfg.MaxInputBytes,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("build Telegram channel: %w", err)
+		}
+		channels = append(channels, tgChannel)
 	}
 
 	logger.Info("application built", "config", input.Config.Summary())
 	runtime := &Runtime{
 		Application: application,
 		Logger:      logger,
-		Channels:    []channel.Channel{cliChannel},
+		Channels:    channels,
 	}
 	runtime.AddCloser(auditSink)
 	keepAudit = true

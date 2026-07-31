@@ -26,6 +26,15 @@ const (
 	DefaultMaxInputBytes = 1024 * 1024
 	MaxCLIInputBytes     = 16 * 1024 * 1024
 
+	// Telegram defaults. Plain text leaves room below Telegram's 4096-rune limit.
+	DefaultTelegramPollTimeout      = 30 * time.Second
+	DefaultTelegramRetryMinBackoff  = 500 * time.Millisecond
+	DefaultTelegramRetryMaxBackoff  = 30 * time.Second
+	DefaultTelegramMaxConcurrency   = 4
+	DefaultTelegramMaxInputBytes    = 64 * 1024
+	DefaultTelegramEditInterval     = 750 * time.Millisecond
+	DefaultTelegramMessageChunkSize = 3500
+
 	// Security default
 	DefaultSecurityMode     = "ask-dangerous"
 	DefaultApprovalTimeout  = 5 * time.Minute
