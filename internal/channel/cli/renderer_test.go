@@ -127,3 +127,63 @@ func TestTextRequestRenderer(t *testing.T) {
 		t.Fatal("Emit after Finish error=nil")
 	}
 }
+
+// TestTextRequestRendererHandlesStageEvents pins the rendering of a /modeling
+// advance: one line per stage transition, and a blocked stage worded differently
+// from a failed one.
+func TestTextRequestRendererHandlesStageEvents(t *testing.T) {
+	var output bytes.Buffer
+	renderer, err := NewTextRenderer().New(&output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := []runstream.Event{
+		{Type: runstream.EventRunStarted, Sequence: 1},
+		{Type: runstream.EventStageStarted, Sequence: 2, Stage: "plan"},
+		{Type: runstream.EventStageProgress, Sequence: 3, Stage: "plan", Text: "reading datasheet"},
+		{Type: runstream.EventStageCompleted, Sequence: 4, Stage: "plan", Text: "wrote plan.md"},
+		{Type: runstream.EventStageCompleted, Sequence: 5, Stage: "emit", Summary: "awaiting_apply"},
+		{Type: runstream.EventStageCompleted, Sequence: 6, Stage: "verify", ErrorKind: "build_failed", Summary: "build_failed"},
+		{Type: runstream.EventRunCompleted, Sequence: 7},
+	}
+	for _, event := range events {
+		if err := renderer.Emit(context.Background(), event); err != nil {
+			t.Fatalf("emit %s: %v", event.Type, err)
+		}
+	}
+	want := "[stage] plan started\n" +
+		"[stage] plan: reading datasheet\n" +
+		"[stage] plan done: wrote plan.md\n" +
+		"[stage] emit blocked: awaiting_apply\n" +
+		"[stage] verify failed: build_failed\n"
+	if got := output.String(); got != want {
+		t.Fatalf("output=%q want=%q", got, want)
+	}
+	// Stage events are not streamed assistant text: the command's own reply still
+	// has to be printed afterwards.
+	if renderer.StreamedText() {
+		t.Fatal("StreamedText()=true for stage events")
+	}
+}
+
+// TestTextRequestRendererRejectsUnknownAndOutOfRunStageEvents guards the two
+// properties that make a lossy event stream safe: an unknown type is a hard
+// failure (a renderer that silently ignored it would hide a protocol change),
+// and a stage event outside an active run is refused.
+func TestTextRequestRendererRejectsUnknownAndOutOfRunStageEvents(t *testing.T) {
+	var output bytes.Buffer
+	renderer, err := NewTextRenderer().New(&output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := renderer.Emit(context.Background(), runstream.Event{
+		Type: runstream.EventStageStarted, Sequence: 1, Stage: "plan",
+	}); err == nil {
+		t.Fatal("stage_started before run_started error=nil")
+	}
+	if err := renderer.Emit(context.Background(), runstream.Event{
+		Type: runstream.EventType("stage_polished"), Sequence: 2, Stage: "plan",
+	}); err == nil {
+		t.Fatal("unknown event type error=nil")
+	}
+}

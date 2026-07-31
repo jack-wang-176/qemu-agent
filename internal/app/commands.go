@@ -86,7 +86,13 @@ type CommandDependencies struct {
 	Skills     SkillCommands
 	Memories   MemoryCommands
 	Candidates CandidateCommands
-	Now        func() time.Time
+	// Modeling and Apply are the I8 pipeline. They are two fields rather than one
+	// because they have different disabled forms: a build may be perfectly able to
+	// generate and review a device (Modeling live) while having no QEMU tree to
+	// land it in (Apply disabled).
+	Modeling ModelingCommands
+	Apply    ApplyCommands
+	Now      func() time.Time
 }
 
 type CommandResult struct {
@@ -108,6 +114,8 @@ type CommandRouter struct {
 	skills     SkillCommands
 	memories   MemoryCommands
 	candidates CandidateCommands
+	modeling   ModelingCommands
+	apply      ApplyCommands
 	memoryTopK int
 	now        func() time.Time
 }
@@ -136,6 +144,16 @@ func NewCommandRouter(deps CommandDependencies, cfg CommandConfig) (*CommandRout
 	if deps.Candidates == nil {
 		return nil, errors.New("command router candidates is nil")
 	}
+	// Same rule for the pipeline: a build with modeling off wires
+	// modeling.DisabledRunner and modeling.DisabledApplier, which answer every call
+	// with a category the command layer already knows how to word. A nil here would
+	// mean the object graph is incomplete, so it is a wiring error, not a mode.
+	if deps.Modeling == nil {
+		return nil, errors.New("command router modeling is nil")
+	}
+	if deps.Apply == nil {
+		return nil, errors.New("command router apply is nil")
+	}
 	if cfg.MemoryTopK <= 0 {
 		return nil, errors.New("command router memory top-k must be > 0")
 	}
@@ -150,6 +168,8 @@ func NewCommandRouter(deps CommandDependencies, cfg CommandConfig) (*CommandRout
 		skills:     deps.Skills,
 		memories:   deps.Memories,
 		candidates: deps.Candidates,
+		modeling:   deps.Modeling,
+		apply:      deps.Apply,
 		memoryTopK: cfg.MemoryTopK,
 		now:        deps.Now,
 	}, nil
@@ -181,6 +201,7 @@ func (r *CommandRouter) Execute(ctx context.Context, cc CommandContext, command 
 				"/skills [list|show <name>]",
 				"/remember [--kind=<kind>] [--scope=<scope>] <text>",
 				"/memory list|search <text>|show <id>|forget <id>|pending|approve <id>|reject <id>",
+				"/modeling new <title>|list|show <id>|advance <id> [--stage=<stage>] [--source=<path>] [request]|diff <id>|apply <id>|evidence <id>|reset <id> <stage> --confirm=<id>",
 				"/exit",
 			}, "\n"),
 			Action: channel.ActionReply,
@@ -228,6 +249,8 @@ func (r *CommandRouter) Execute(ctx context.Context, cc CommandContext, command 
 		return r.remember(ctx, cc, command.Args)
 	case "memory":
 		return r.memoryCommand(ctx, cc, command.Args)
+	case "modeling":
+		return r.modelingCommand(ctx, cc, command.Args)
 	case "exit":
 		if err := requireArgCount(command, 0, "/exit"); err != nil {
 			return CommandResult{}, err

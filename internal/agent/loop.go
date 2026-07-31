@@ -86,7 +86,7 @@ func (a *Agent) applyProjections(target *session.Session, projections []toolProj
 	return nil
 }
 
-func (a *Agent) runWorking(ctx context.Context, s *session.Session, input RunInput, events *emitter) (string, []toolProjection, error) {
+func (a *Agent) runWorking(ctx context.Context, s *session.Session, input RunInput, events runstream.Emitter) (string, []toolProjection, error) {
 	var projections []toolProjection
 	resolved, err := a.models.Resolve(s.ModelRef)
 	if err != nil {
@@ -178,7 +178,7 @@ func (a *Agent) runWorking(ctx context.Context, s *session.Session, input RunInp
 	return "", nil, fmt.Errorf("reached max turns (%d)", a.maxTurns)
 }
 
-func failRun(ctx context.Context, events *emitter, cause error) error {
+func failRun(ctx context.Context, events runstream.Emitter, cause error) error {
 	kind, summary := publicError(cause)
 	emitErr := events.Emit(ctx, runstream.Event{Type: runstream.EventRunFailed, ErrorKind: kind, Summary: summary})
 	if emitErr != nil {

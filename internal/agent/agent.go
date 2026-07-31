@@ -139,7 +139,7 @@ func New(deps Dependencies, cfg Config) (*Agent, error) {
 	}, nil
 }
 
-func (a *Agent) completeTurn(ctx context.Context, resolved llm.ResolvedModel, req llm.Request, emitter *emitter, turn int) (response *llm.Response, err error) {
+func (a *Agent) completeTurn(ctx context.Context, resolved llm.ResolvedModel, req llm.Request, emitter runstream.Emitter, turn int) (response *llm.Response, err error) {
 	if !a.stream {
 		resp, err := resolved.Provider.Complete(ctx, req)
 		if err != nil {

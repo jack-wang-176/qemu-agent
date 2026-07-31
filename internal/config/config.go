@@ -22,6 +22,7 @@ type Config struct {
 	Skills    SkillConfig
 	Memory    MemoryConfig
 	Prompt    PromptConfig
+	Modeling  ModelingConfig
 }
 
 type AgentConfig struct {
