@@ -1,12 +1,16 @@
 package tools
 
 import (
-	"context"
 	"fmt"
 	"sort"
 
 	"github.com/jack-wang-176/qemu-agent/internal/llm"
 )
+
+type Catalog interface {
+	Schema() []llm.ToolSchema
+	Lookup(name string) (Tool, bool)
+}
 
 type RegisterTool struct {
 	Tool   Tool
@@ -67,10 +71,10 @@ func (m *Manager) Schemas() []llm.ToolSchema {
 	return out
 }
 
-func (m *Manager) Execute(ctx context.Context, name, args string) (string, error) {
-	t, ok := m.tools[name]
+func (m *Manager) Lookup(name string) (Tool, bool) {
+	register, ok := m.tools[name]
 	if !ok {
-		return "", fmt.Errorf("tool %q not found", name)
+		return nil, false
 	}
-	return t.Tool.Execute(ctx, args)
+	return register.Tool, true
 }

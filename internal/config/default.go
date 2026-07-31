@@ -25,6 +25,12 @@ const (
 	DefaultCLIPrompt     = "> "
 	DefaultMaxInputBytes = 1024 * 1024
 	MaxCLIInputBytes     = 16 * 1024 * 1024
+
+	// Security default
+	DefaultSecurityMode     = "ask-dangerous"
+	DefaultApprovalTimeout  = 5 * time.Minute
+	DefaultMaxAuditArgBytes = 16 * 1024
+	DefaultMaxAuditOutBytes = 16 * 1024
 )
 
 const DefaultToolTimeout = 60 * time.Second

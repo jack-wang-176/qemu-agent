@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/jack-wang-176/qemu-agent/internal/agent"
 	"github.com/jack-wang-176/qemu-agent/internal/channel"
 	"github.com/jack-wang-176/qemu-agent/internal/llm"
 	"github.com/jack-wang-176/qemu-agent/internal/session"
@@ -20,7 +21,7 @@ type recordingRunner struct {
 	sessions []*session.Session
 }
 
-func (r *recordingRunner) Run(_ context.Context, sess *session.Session, _ string) (string, error) {
+func (r *recordingRunner) Run(_ context.Context, sess *session.Session, _ agent.RunInput) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sessions = append(r.sessions, sess)
