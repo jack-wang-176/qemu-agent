@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/jack-wang-176/qemu-agent/app/session"
 	"github.com/jack-wang-176/qemu-agent/app/tool"
 	"github.com/jack-wang-176/qemu-agent/app/tool/tools"
 	"github.com/openai/openai-go/v3"
@@ -31,9 +32,8 @@ func main() {
 		panic("Env variable OPENROUTER_API_KEY not found")
 	}
 
-	messages := []openai.ChatCompletionMessageParamUnion{
-		openai.UserMessage(prompt),
-	}
+	//todo 添加traceid追踪实例
+	session := session.NewSession("todo", prompt)
 	client := openai.NewClient(option.WithAPIKey(apiKey), option.WithBaseURL(baseUrl))
 	manager := tool.NewManager()
 	manager.Register(&tools.ReadTool{})
@@ -44,7 +44,7 @@ func main() {
 		resp, err := client.Chat.Completions.New(context.Background(),
 			openai.ChatCompletionNewParams{
 				Model:    "anthropic/claude-haiku-4.5",
-				Messages: messages,
+				Messages: session.Msg,
 				Tools:    ToolCalls,
 			},
 		)
@@ -52,10 +52,9 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		var saParam = resp.Choices[0].Message
-		messages = append(messages, saParam.ToParam())
+		session.AddChatResult(resp)
 		if len(resp.Choices[0].Message.ToolCalls) == 0 {
-			fmt.Print(saParam.Content)
+			fmt.Print(resp.Choices[0].Message.Content)
 			break
 		}
 		for _, toolCall := range resp.Choices[0].Message.ToolCalls {
@@ -63,7 +62,7 @@ func main() {
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error executing tool: %v\n", err)
 			}
-			messages = append(messages, openai.ToolMessage(data, toolCall.ID))
+			session.AddToolResult(data, toolCall.ID)
 		}
 	}
 }
