@@ -48,6 +48,10 @@ func (c Config) Validate() error {
 	if err := c.validateKnowledge(); err != nil {
 		return err
 	}
+	// modeling config validate
+	if err := c.validateModeling(); err != nil {
+		return err
+	}
 	// agent config validate
 	if strings.TrimSpace(c.Agent.Provider) == "" {
 		return errors.New("QEMU_AGENT_PROVIDER is empty")
