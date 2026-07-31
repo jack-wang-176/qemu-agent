@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jack-wang-176/qemu-agent/internal/agent"
@@ -16,6 +17,7 @@ import (
 	"github.com/jack-wang-176/qemu-agent/internal/config"
 	"github.com/jack-wang-176/qemu-agent/internal/llm"
 	"github.com/jack-wang-176/qemu-agent/internal/memory"
+	"github.com/jack-wang-176/qemu-agent/internal/modeling"
 	"github.com/jack-wang-176/qemu-agent/internal/obs"
 	"github.com/jack-wang-176/qemu-agent/internal/session"
 	"github.com/jack-wang-176/qemu-agent/internal/tools/security"
@@ -44,6 +46,31 @@ func memoryTopK(cfg config.Config) int {
 		return cfg.Memory.TopK
 	}
 	return config.DefaultMemoryTopK
+}
+
+// defaultCompleterMaxTokens is the output budget for a background completion when
+// the model definition does not state one. It is generous because the largest
+// thing a background call produces is a Reg-IR for a register-heavy device, and a
+// truncated JSON reply fails schema validation rather than degrading gracefully.
+const defaultCompleterMaxTokens = 8192
+
+// completerBudget picks the output ceiling for a non-conversational model call.
+//
+// ModelDefinition.MaxOutput is optional: zero means "no explicit limit, let the
+// provider apply its own default", and the agent loop passes it straight through
+// on that understanding. A Completer cannot do the same — it requires a positive
+// budget — so an unset definition needs an explicit value here rather than an
+// error at startup, which is what a plain pass-through produced.
+func completerBudget(resolved llm.ResolvedModel) int {
+	if resolved.Definition.MaxOutput > 0 {
+		return resolved.Definition.MaxOutput
+	}
+	// Stay under the context window when it is small enough for 8192 to be an
+	// unreasonable share of it; a completion cannot exceed the window anyway.
+	if context := resolved.Definition.MaxContext; context > 0 && context <= defaultCompleterMaxTokens {
+		return context / 2
+	}
+	return defaultCompleterMaxTokens
 }
 
 func validateBuildInput(input BuildInput) error {
@@ -135,9 +162,29 @@ func Build(input BuildInput) (*Runtime, error) {
 			_ = auditSink.Close()
 		}
 	}()
-	executor, err := security.NewExecutor(security.ExecutorDependencies{Catalog: manager, Policy: policy, Approver: security.RoutingApprover{Interactive: interactiveApprover, Fallback: security.DenyAllApprover{}}, Audit: auditSink, Redactor: redactor}, input.Config.Security.ApprovalTimeout)
+	approver := security.RoutingApprover{Interactive: interactiveApprover, Fallback: security.DenyAllApprover{}}
+	executor, err := security.NewExecutor(security.ExecutorDependencies{Catalog: manager, Policy: policy, Approver: approver, Audit: auditSink, Redactor: redactor}, input.Config.Security.ApprovalTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("build secure tool executor: %w", err)
+	}
+
+	// The modeling pipeline gets its own executor over a catalog rooted at the QEMU
+	// tree. It shares the policy, the approver, the redactor and the audit sink, so
+	// a write into QEMU is judged and logged exactly like any other write; what it
+	// does not share is the tool root, because the agent's tools are confined to
+	// Paths.Workspace and must stay that way. It stays nil unless modeling is
+	// enabled with a QemuRoot, and BuildModeling turns nil into the disabled pair.
+	var modelingExecutor build.ToolExecutor
+	if input.Config.Modeling.Enabled && strings.TrimSpace(input.Config.Modeling.QemuRoot) != "" {
+		modelingManager, err := build.BuildModelingToolManager(input.Config.Modeling.QemuRoot, input.Config.Tools)
+		if err != nil {
+			return nil, fmt.Errorf("build modeling tool manager: %w", err)
+		}
+		created, err := security.NewExecutor(security.ExecutorDependencies{Catalog: modelingManager, Policy: policy, Approver: approver, Audit: auditSink, Redactor: redactor}, input.Config.Security.ApprovalTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("build modeling tool executor: %w", err)
+		}
+		modelingExecutor = created
 	}
 
 	contextManager, err := build.BuildContextManager(
@@ -153,7 +200,7 @@ func Build(input BuildInput) (*Runtime, error) {
 	// command has to branch on configuration at request time.
 	var completer memory.Completer
 	if input.Config.Memory.Enabled && input.Config.Memory.AutoExtract {
-		providerCompleter, err := build.NewProviderCompleter(resolvedDefault, resolvedDefault.Definition.MaxOutput)
+		providerCompleter, err := build.NewProviderCompleter(resolvedDefault, completerBudget(resolvedDefault))
 		if err != nil {
 			return nil, fmt.Errorf("build extraction completer: %w", err)
 		}
@@ -170,6 +217,42 @@ func Build(input BuildInput) (*Runtime, error) {
 		return nil, fmt.Errorf("build knowledge layer: %w", err)
 	}
 
+	// The modeling stages get their own completer, resolved from Modeling.Model when
+	// the operator set one. Modeling work is long, and its cost profile differs from
+	// a chat turn, so an operator may want a different model for it than for the
+	// conversation; an empty value reuses the session default. It is built only when
+	// modeling is enabled, so a disabled build performs no model resolution at all.
+	var modelingCompleter modeling.Completer
+	if input.Config.Modeling.Enabled {
+		resolvedModeling := resolvedDefault
+		if name := strings.TrimSpace(input.Config.Modeling.Model); name != "" {
+			resolved, err := models.ResolveName(name)
+			if err != nil {
+				return nil, fmt.Errorf("resolve modeling model: %w", err)
+			}
+			resolvedModeling = resolved
+		}
+		providerCompleter, err := build.NewProviderCompleter(resolvedModeling, completerBudget(resolvedModeling))
+		if err != nil {
+			return nil, fmt.Errorf("build modeling completer: %w", err)
+		}
+		modelingCompleter = providerCompleter
+	}
+
+	// The modeling layer, like the knowledge layer, returns non-nil implementations
+	// even when disabled: with QEMU_AGENT_MODELING_ENABLED unset the router still
+	// gets a working pair that answers "modeling is disabled", so /modeling exists
+	// and explains itself rather than being absent.
+	modelingLayer, err := build.BuildModeling(build.ModelingInput{
+		Config:    input.Config,
+		Logger:    logger,
+		Executor:  modelingExecutor,
+		Completer: modelingCompleter,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("build modeling layer: %w", err)
+	}
+
 	commands, err := NewCommandRouter(CommandDependencies{
 		Sessions:   registry,
 		Updater:    registry,
@@ -178,6 +261,8 @@ func Build(input BuildInput) (*Runtime, error) {
 		Skills:     skillRegistry,
 		Memories:   knowledge.Store,
 		Candidates: knowledge.Candidates,
+		Modeling:   modelingLayer.Runner,
+		Apply:      modelingLayer.Applier,
 	}, CommandConfig{MemoryTopK: memoryTopK(input.Config)})
 	if err != nil {
 		return nil, fmt.Errorf("build command router: %w", err)

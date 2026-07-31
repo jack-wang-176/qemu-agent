@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/jack-wang-176/qemu-agent/internal/agent"
 	"github.com/jack-wang-176/qemu-agent/internal/channel"
 	"github.com/jack-wang-176/qemu-agent/internal/memory"
@@ -31,6 +33,7 @@ type Application struct {
 	extractor   memory.Extractor
 	candidates  CandidateSink
 	workspaceID string
+	newTraceID  func() string
 	logger      *slog.Logger
 }
 
@@ -48,7 +51,11 @@ type Dependencies struct {
 	// derived id, never a filesystem path, because it ends up in stored memory
 	// scopes and would otherwise leak the operator's directory layout.
 	WorkspaceID string
-	Logger      *slog.Logger
+	// NewTraceID may be nil: a trace id is a pure identifier, so a default is
+	// safer than a startup failure. It is injectable because tests need the id
+	// they will later assert on.
+	NewTraceID func() string
+	Logger     *slog.Logger
 }
 
 type CommandHandler interface {
@@ -82,6 +89,10 @@ func NewApplication(deps Dependencies) (*Application, error) {
 	if deps.Logger == nil {
 		return nil, errors.New("application logger is nil")
 	}
+	newTraceID := deps.NewTraceID
+	if newTraceID == nil {
+		newTraceID = func() string { return "cmd-" + uuid.NewString() }
+	}
 
 	return &Application{
 		runner:      deps.Runner,
@@ -90,6 +101,7 @@ func NewApplication(deps Dependencies) (*Application, error) {
 		extractor:   deps.Extractor,
 		candidates:  deps.Candidates,
 		workspaceID: deps.WorkspaceID,
+		newTraceID:  newTraceID,
 		logger:      deps.Logger,
 	}, nil
 }
@@ -138,7 +150,15 @@ func (a *Application) Handle(ctx context.Context, request channel.Request) (chan
 		return channel.Outbound{}, err
 	}
 	if isCommand {
-		result, err := a.commands.Execute(ctx, a.commandContext(in), command)
+		// The command branch gets the same request-scoped capabilities the agent
+		// branch has always had. Building the emitter can fail only if the identity
+		// is incomplete, which validateInbound already ruled out; a failure here is
+		// therefore a programming error and is reported rather than swallowed.
+		cc, err := a.commandContext(in, request)
+		if err != nil {
+			return channel.Outbound{}, err
+		}
+		result, err := a.commands.Execute(ctx, cc, command)
 		if err != nil {
 			return channel.Outbound{}, err
 		}
@@ -180,12 +200,30 @@ func (a *Application) Handle(ctx context.Context, request channel.Request) (chan
 	}, nil
 }
 
-func (a *Application) commandContext(in channel.Inbound) CommandContext {
+// commandContext derives everything a command may know about its request. The
+// scope fields come from the application's own workspace id and the channel's
+// authenticated user, never from the command line the user typed, and the trace
+// id is generated here so a command's events and audit entries share one id.
+func (a *Application) commandContext(in channel.Inbound, request channel.Request) (CommandContext, error) {
+	traceID := a.newTraceID()
+	events, err := runstream.NewEmitter(runstream.EmitterOptions{
+		Sink: request.Events,
+		Identity: runstream.Event{
+			TraceID: traceID, SessionKey: in.SessionKey, Channel: in.Channel,
+		},
+	})
+	if err != nil {
+		return CommandContext{}, fmt.Errorf("create command emitter: %w", err)
+	}
 	return CommandContext{
 		SessionKey:  in.SessionKey,
 		UserID:      in.UserID,
 		WorkspaceID: a.workspaceID,
-	}
+		TraceID:     traceID,
+		Interactive: request.Capabilities.InteractiveApproval,
+		Channel:     in.Channel,
+		Events:      events,
+	}, nil
 }
 
 // proposeMemories is the post-run hook. It is best effort by design: the answer

@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 
@@ -38,6 +39,21 @@ type appTestSink struct{ events []runstream.Event }
 func (s *appTestSink) Emit(_ context.Context, event runstream.Event) error {
 	s.events = append(s.events, event)
 	return nil
+}
+
+// recordingRegistry is a SessionRegistry that never has to work: the command
+// branch of Handle must not touch sessions at all, so a test that routes a
+// command uses this to prove it.
+type recordingRegistry struct{ calls int }
+
+func (r *recordingRegistry) WithSession(_ context.Context, _ string, _ func(*session.Session) error) error {
+	r.calls++
+	return errors.New("the command branch must not open a session")
+}
+
+func (r *recordingRegistry) NewWithTrace(_ context.Context, _, _ string) (*session.Session, error) {
+	r.calls++
+	return nil, errors.New("the command branch must not create a session")
 }
 
 type memoryStore struct {
@@ -200,6 +216,104 @@ func TestHandlePassesRequestEventSinkToRunner(t *testing.T) {
 	defer runner.mu.Unlock()
 	if len(runner.inputs) != 1 || runner.inputs[0].Events != sink {
 		t.Fatalf("inputs=%#v", runner.inputs)
+	}
+}
+
+// recordingCommands captures the CommandContext the application derives, which
+// is the only place a command learns who is asking and what the transport can do.
+type recordingCommands struct {
+	contexts []CommandContext
+}
+
+func (r *recordingCommands) Execute(_ context.Context, cc CommandContext, _ Command) (CommandResult, error) {
+	r.contexts = append(r.contexts, cc)
+	return reply("ok"), nil
+}
+
+func TestCommandContextCarriesIdentityEventsAndInteractive(t *testing.T) {
+	commands := &recordingCommands{}
+	sink := &appTestSink{}
+	application, err := NewApplication(Dependencies{
+		Runner:      &recordingRunner{},
+		Sessions:    &recordingRegistry{},
+		Commands:    commands,
+		Extractor:   &stubExtractor{},
+		Candidates:  &recordingCandidates{},
+		WorkspaceID: testWorkspaceID,
+		NewTraceID:  func() string { return "trace-cmd" },
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := application.Handle(context.Background(), channel.Request{
+		Inbound:      channel.Inbound{Channel: "telegram", SessionKey: "tg:42", UserID: "alice", Text: "/help"},
+		Capabilities: channel.Capabilities{InteractiveApproval: true},
+		Events:       sink,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(commands.contexts) != 1 {
+		t.Fatalf("contexts = %#v", commands.contexts)
+	}
+	cc := commands.contexts[0]
+	// Identity comes from the channel and the application, never from the typed
+	// command, and the workspace is the application's own id.
+	if cc.UserID != "alice" || cc.WorkspaceID != testWorkspaceID || cc.SessionKey != "tg:42" {
+		t.Fatalf("identity = %#v", cc)
+	}
+	if cc.TraceID != "trace-cmd" {
+		t.Fatalf("trace id = %q", cc.TraceID)
+	}
+	if !cc.Interactive {
+		t.Fatal("an interactive channel was reported as non-interactive")
+	}
+	// Events is usable and reaches the request's sink, so a long command can
+	// report progress without knowing which channel it is on.
+	if cc.Events == nil {
+		t.Fatal("Events is nil")
+	}
+	if err := cc.Events.Emit(context.Background(), runstream.Event{Type: runstream.EventRunStarted}); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.events) != 1 || sink.events[0].TraceID != "trace-cmd" || sink.events[0].Channel != "telegram" {
+		t.Fatalf("sink events = %#v", sink.events)
+	}
+}
+
+// TestCommandContextEventsAreUsableWithoutASink pins the "no nil checks in
+// command code" invariant: a request with no event consumer still gets an
+// emitter.
+func TestCommandContextEventsAreUsableWithoutASink(t *testing.T) {
+	commands := &recordingCommands{}
+	application, err := NewApplication(Dependencies{
+		Runner:      &recordingRunner{},
+		Sessions:    &recordingRegistry{},
+		Commands:    commands,
+		Extractor:   &stubExtractor{},
+		Candidates:  &recordingCandidates{},
+		WorkspaceID: testWorkspaceID,
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := application.Handle(context.Background(), channel.Request{
+		Inbound: channel.Inbound{Channel: "cli", SessionKey: "cli:default", Text: "/help"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cc := commands.contexts[0]
+	if cc.Interactive {
+		t.Fatal("a request without capabilities was reported as interactive")
+	}
+	if err := cc.Events.Emit(context.Background(), runstream.Event{Type: runstream.EventRunStarted}); err != nil {
+		t.Fatalf("emit without a sink = %v", err)
+	}
+	// A generated trace id is still an id: a command must always be able to
+	// correlate its audit entries.
+	if strings.TrimSpace(cc.TraceID) == "" {
+		t.Fatal("trace id is empty")
 	}
 }
 

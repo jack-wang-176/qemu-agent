@@ -110,6 +110,39 @@ func (r *TextRequestRenderer) Emit(ctx context.Context, event runstream.Event) e
 		if _, err := fmt.Fprintf(r.writer, "[tool] %s %s\n", event.ToolName, status); err != nil {
 			return fmt.Errorf("write CLI tool result: %w", err)
 		}
+	case runstream.EventStageStarted:
+		if !r.started || r.terminal {
+			return errors.New("CLI request renderer received stage_started outside an active run")
+		}
+		if err := r.ensureNewline(); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(r.writer, "[stage] %s started\n", event.Stage); err != nil {
+			return fmt.Errorf("write CLI stage start: %w", err)
+		}
+	case runstream.EventStageProgress:
+		if !r.started || r.terminal {
+			return errors.New("CLI request renderer received stage_progress outside an active run")
+		}
+		if err := r.ensureNewline(); err != nil {
+			return err
+		}
+		// Progress is a whole line of its own rather than a delta: a stage may run
+		// for minutes, and interleaving it with streamed text would produce output
+		// nobody can read back.
+		if _, err := fmt.Fprintf(r.writer, "[stage] %s: %s\n", event.Stage, event.Text); err != nil {
+			return fmt.Errorf("write CLI stage progress: %w", err)
+		}
+	case runstream.EventStageCompleted:
+		if !r.started || r.terminal {
+			return errors.New("CLI request renderer received stage_completed outside an active run")
+		}
+		if err := r.ensureNewline(); err != nil {
+			return err
+		}
+		if _, err := io.WriteString(r.writer, stageOutcomeLine(event)); err != nil {
+			return fmt.Errorf("write CLI stage result: %w", err)
+		}
 	case runstream.EventRunCompleted:
 		if !r.started || r.terminal {
 			return errors.New("CLI request renderer received invalid run_completed")
@@ -147,6 +180,26 @@ func (r *TextRequestRenderer) Finish(ctx context.Context) error {
 }
 
 func (r *TextRequestRenderer) StreamedText() bool { return r.streamedText }
+
+// stageOutcomeLine renders the three ways a stage can end. Blocked is not a
+// failure — it means the stage did its work and a human has to act — so it must
+// not be rendered like one, or every /modeling emit would look broken.
+func stageOutcomeLine(event runstream.Event) string {
+	switch {
+	case event.ErrorKind != "":
+		return fmt.Sprintf("[stage] %s failed: %s\n", event.Stage, event.Summary)
+	case event.Summary != "":
+		line := fmt.Sprintf("[stage] %s blocked: %s", event.Stage, event.Summary)
+		if event.Text != "" {
+			line += " — " + event.Text
+		}
+		return line + "\n"
+	case event.Text != "":
+		return fmt.Sprintf("[stage] %s done: %s\n", event.Stage, event.Text)
+	default:
+		return fmt.Sprintf("[stage] %s done\n", event.Stage)
+	}
+}
 
 func (r *TextRequestRenderer) ensureNewline() error {
 	if !r.lineOpen {

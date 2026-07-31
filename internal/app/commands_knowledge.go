@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/jack-wang-176/qemu-agent/internal/memory"
+	"github.com/jack-wang-176/qemu-agent/internal/runstream"
 	"github.com/jack-wang-176/qemu-agent/internal/skills"
 )
 
@@ -35,13 +36,35 @@ type CandidateCommands interface {
 	Resolve(context.Context, string, memory.Scope, memory.CandidateStatus, string) (memory.Candidate, error)
 }
 
-// CommandContext carries request identity. The router must never derive a user
-// from the session key: keys are formatted per channel, and one parsing mistake
-// would decide which user's private memories a command may touch.
+// CommandContext carries request identity plus the two request-scoped
+// capabilities a command may need. The router must never derive a user from the
+// session key: keys are formatted per channel, and one parsing mistake would
+// decide which user's private memories a command may touch.
+//
+// Interactive and Events are here for the same reason they are on the agent's
+// RunInput: a command that runs for minutes (/modeling advance) has to be able
+// to report progress, and a command that applies a patch has to know whether
+// anybody can be asked for approval. Neither may be inferred from the channel
+// name — the transport declares its capabilities, the command layer only reads
+// them.
 type CommandContext struct {
 	SessionKey  string
 	UserID      string
 	WorkspaceID string
+	// TraceID correlates a command's events and audit entries with the request
+	// that produced them. It is generated per request, never taken from input.
+	TraceID string
+	// Interactive is channel.Capabilities.InteractiveApproval: true only when
+	// somebody is on the other end who can answer an approval prompt.
+	Interactive bool
+	// Channel is how the request arrived ("cli", "telegram"). It is carried for
+	// audit identity: a background subsystem that executes a tool on this
+	// request's behalf has to record which channel asked, and it cannot derive
+	// that from anything else it holds.
+	Channel string
+	// Events is never nil — the application injects runstream.NopEmitter when no
+	// sink is attached — so command code contains no `if cc.Events != nil`.
+	Events runstream.Emitter
 }
 
 const (
