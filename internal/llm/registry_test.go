@@ -13,7 +13,7 @@ func (registryTestProvider) Capability() Capabilities {
 	return Capabilities{Tools: true, Streaming: true, MaxContext: 4096}
 }
 func (registryTestProvider) Complete(context.Context, Request) (*Response, error) { return nil, nil }
-func (registryTestProvider) Stream(context.Context, Request) (<-chan StreamEvent, error) {
+func (registryTestProvider) Stream(context.Context, Request) (Stream, error) {
 	return nil, nil
 }
 

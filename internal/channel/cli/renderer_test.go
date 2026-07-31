@@ -2,10 +2,12 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"testing"
 
 	"github.com/jack-wang-176/qemu-agent/internal/channel"
+	"github.com/jack-wang-176/qemu-agent/internal/runstream"
 )
 
 type failingWriter struct{ err error }
@@ -85,4 +87,43 @@ func TestTextRenderer(t *testing.T) {
 			t.Fatalf("error = %v", err)
 		}
 	})
+}
+
+func TestTextRequestRenderer(t *testing.T) {
+	var output bytes.Buffer
+	renderer, err := NewTextRenderer().New(&output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok := true
+	events := []runstream.Event{
+		{Type: runstream.EventRunStarted, Sequence: 1},
+		{Type: runstream.EventTurnStarted, Sequence: 2, Turn: 1},
+		{Type: runstream.EventTextDelta, Sequence: 3, Turn: 1, Text: "reading"},
+		{Type: runstream.EventToolStarted, Sequence: 4, Turn: 1, ToolCallID: "call", ToolName: "read"},
+		{Type: runstream.EventToolCompleted, Sequence: 5, Turn: 1, ToolCallID: "call", ToolName: "read", ToolOK: &ok},
+		{Type: runstream.EventTurnStarted, Sequence: 6, Turn: 2},
+		{Type: runstream.EventTextDelta, Sequence: 7, Turn: 2, Text: "done"},
+		{Type: runstream.EventRunCompleted, Sequence: 8},
+	}
+	for _, event := range events {
+		if err := renderer.Emit(context.Background(), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := renderer.Finish(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := renderer.Finish(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output.String(), "reading\n[tool] read requested\n[tool] read completed\ndone\n"; got != want {
+		t.Fatalf("output=%q want=%q", got, want)
+	}
+	if !renderer.StreamedText() {
+		t.Fatal("StreamedText()=false")
+	}
+	if err := renderer.Emit(context.Background(), runstream.Event{Type: runstream.EventRunStarted, Sequence: 9}); err == nil {
+		t.Fatal("Emit after Finish error=nil")
+	}
 }

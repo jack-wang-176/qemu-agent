@@ -162,6 +162,7 @@ func Build(input BuildInput) (*Runtime, error) {
 		Output:    input.CLI.Output,
 		ErrOutput: input.CLI.ErrOutput,
 		Renderer:  cli.NewTextRenderer(),
+		Events:    cli.NewTextRenderer(),
 		Logger:    logger,
 	}, cli.Config{
 		Prompt:        input.Config.Channel.CLIPrompt,

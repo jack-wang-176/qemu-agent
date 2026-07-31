@@ -24,7 +24,7 @@ func (buildTestProvider) Capability() llm.Capabilities {
 func (buildTestProvider) Complete(context.Context, llm.Request) (*llm.Response, error) {
 	return nil, nil
 }
-func (buildTestProvider) Stream(context.Context, llm.Request) (<-chan llm.StreamEvent, error) {
+func (buildTestProvider) Stream(context.Context, llm.Request) (llm.Stream, error) {
 	return nil, nil
 }
 

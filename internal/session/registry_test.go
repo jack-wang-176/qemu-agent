@@ -177,6 +177,6 @@ func (sessionTestProvider) Capability() llm.Capabilities {
 func (sessionTestProvider) Complete(context.Context, llm.Request) (*llm.Response, error) {
 	return nil, nil
 }
-func (sessionTestProvider) Stream(context.Context, llm.Request) (<-chan llm.StreamEvent, error) {
+func (sessionTestProvider) Stream(context.Context, llm.Request) (llm.Stream, error) {
 	return nil, nil
 }
