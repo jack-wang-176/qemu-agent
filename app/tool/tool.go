@@ -1,6 +1,6 @@
 package tool
 
-import(
+import (
 	openai "github.com/openai/openai-go/v3"
 )
 

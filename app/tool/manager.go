@@ -1,8 +1,9 @@
 package tool
 
-import(
-	openai "github.com/openai/openai-go/v3"
+import (
 	"fmt"
+
+	openai "github.com/openai/openai-go/v3"
 )
 
 type Manager struct {
