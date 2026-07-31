@@ -8,8 +8,15 @@ import (
 )
 
 type Request struct {
-	Inbound Inbound
-	Events  runstream.EventSink
+	Inbound      Inbound
+	Capabilities Capabilities
+	Events       runstream.EventSink
+}
+
+// Capabilities describes request-scoped transport capabilities. It is explicit
+// so the application never infers security properties from a channel name.
+type Capabilities struct {
+	InteractiveApproval bool
 }
 
 // Inbound is a channel-neutral request passed to the application layer.
