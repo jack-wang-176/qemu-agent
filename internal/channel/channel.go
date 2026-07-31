@@ -2,6 +2,7 @@ package channel
 
 import (
 	"context"
+	"errors"
 )
 
 // Inbound is a channel-neutral request passed to the application layer.
@@ -36,4 +37,15 @@ type Handler interface {
 type Channel interface {
 	Name() string
 	Run(context.Context, Handler) error
+}
+
+// if this err is recoverable then out
+type RecoverableError interface {
+	error
+	Recoverable() bool
+}
+
+func IsRecoverable(err error) bool {
+	var target RecoverableError
+	return errors.As(err, &target) && target.Recoverable()
 }
