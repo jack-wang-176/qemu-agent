@@ -13,12 +13,12 @@ type RegisterTool struct {
 	Schema llm.ToolSchema
 }
 type Manager struct {
-	Tool map[string]RegisterTool
+	tools map[string]RegisterTool
 }
 
 func NewManager() *Manager {
 	return &Manager{
-		Tool: make(map[string]RegisterTool),
+		tools: make(map[string]RegisterTool),
 	}
 }
 
@@ -30,7 +30,7 @@ func (m *Manager) Register(tool Tool) error {
 	if tool.Name() == "" {
 		return fmt.Errorf("tool name is empty")
 	}
-	if _, ok := m.Tool[tool.Name()]; ok {
+	if _, ok := m.tools[tool.Name()]; ok {
 		return fmt.Errorf("tool %q already registered", tool.Name())
 	}
 	spec := tool.Spec()
@@ -42,7 +42,7 @@ func (m *Manager) Register(tool Tool) error {
 	if err != nil {
 		return err
 	}
-	m.Tool[tool.Name()] = RegisterTool{
+	m.tools[tool.Name()] = RegisterTool{
 		Tool: tool,
 		Schema: llm.ToolSchema{
 			Name:        tool.Name(),
@@ -55,20 +55,20 @@ func (m *Manager) Register(tool Tool) error {
 
 /* Schemas use names to keep final result in same seq*/
 func (m *Manager) Schemas() []llm.ToolSchema {
-	names := make([]string, 0, len(m.Tool))
-	for _, t := range m.Tool {
+	names := make([]string, 0, len(m.tools))
+	for _, t := range m.tools {
 		names = append(names, t.Schema.Name)
 	}
 	sort.Strings(names)
 	out := make([]llm.ToolSchema, 0, len(names))
 	for _, name := range names {
-		out = append(out, m.Tool[name].Schema)
+		out = append(out, m.tools[name].Schema)
 	}
 	return out
 }
 
 func (m *Manager) Execute(ctx context.Context, name, args string) (string, error) {
-	t, ok := m.Tool[name]
+	t, ok := m.tools[name]
 	if !ok {
 		return "", fmt.Errorf("tool %q not found", name)
 	}

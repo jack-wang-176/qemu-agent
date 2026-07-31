@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/jack-wang-176/qemu-agent/internal/tools/schema"
 )
@@ -15,6 +17,11 @@ type WriteToolParam struct {
 }
 
 type WriteTool struct {
+	workspace string
+}
+
+func NewWriteTool(workspace string) *WriteTool {
+	return &WriteTool{workspace: workspace}
 }
 
 func (wt *WriteTool) Name() string {
@@ -36,11 +43,18 @@ func (wt *WriteTool) Execute(ctx context.Context, args string) (string, error) {
 	if err := json.Unmarshal([]byte(args), &arg); err != nil {
 		return "", fmt.Errorf("decode write args: %w", err)
 	}
-	if arg.FilePath == "" {
+	if strings.TrimSpace(arg.FilePath) == "" {
 		return "", fmt.Errorf("file_path is required")
 	}
-	if err := os.WriteFile(arg.FilePath, []byte(arg.Content), 0644); err != nil {
+	path, err := resolveWorkspacePath(wt.workspace, arg.FilePath)
+	if err != nil {
 		return "", err
 	}
-	return "File written successfully", nil
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return "", fmt.Errorf("create parent directory: %w", err)
+	}
+	if err := os.WriteFile(path, []byte(arg.Content), 0644); err != nil {
+		return "", fmt.Errorf("write %q: %w", path, err)
+	}
+	return fmt.Sprintf("File written successfully: %s", path), nil
 }
