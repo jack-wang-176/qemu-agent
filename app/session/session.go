@@ -19,8 +19,8 @@ type Session struct {
 	CreatedAt    time.Time
 }
 
-func NewSession(traceId, prompt string) Session {
-	return Session{
+func NewSession(traceId, prompt string) *Session {
+	sess := &Session{
 		Id:           uuid.NewString(),
 		TraceId:      traceId,
 		TokenUsage:   0,
@@ -29,4 +29,8 @@ func NewSession(traceId, prompt string) Session {
 		UpdatedAt:    time.Now(),
 		CreatedAt:    time.Now(),
 	}
+	if sess.SystemPrompt != "" {
+		sess.Msg = append(sess.Msg, openai.SystemMessage(sess.SystemPrompt))
+	}
+	return sess
 }
