@@ -18,6 +18,11 @@
 //     on a machine that has no QEMU checkout.
 //   - enabled with QemuRoot — the applier is real, and every write it makes goes
 //     through a security.Executor whose write tool is rooted at that tree.
+//
+// The two capability levels above also explain why there are two executors. The
+// pipeline's reads target datasheets in the workspace; the applier's writes target
+// hw/... under QemuRoot. One root cannot serve both, so the caller passes the
+// workspace-rooted executor as Executor and the QEMU-rooted one as ApplyExecutor.
 package build
 
 import (
@@ -39,9 +44,17 @@ import (
 // first is a model, the second is the process-wide audited side-effect path, and
 // modeling must reuse both rather than construct its own.
 type ModelingInput struct {
-	Config   config.Config
-	Logger   *slog.Logger
-	Executor ToolExecutor // the only side-effect exit; nil is an error when enabled
+	Config config.Config
+	Logger *slog.Logger
+	// Executor is the pipeline's side-effect exit, rooted at Paths.Workspace: extract
+	// reads datasheets from there, and verify's bash carries an absolute path so its
+	// root does not matter. nil is an error when modeling is enabled.
+	Executor ToolExecutor
+	// ApplyExecutor is the applier's side-effect exit, rooted at QemuRoot. It is
+	// separate from Executor because no workspace-rooted write tool can create a file
+	// under hw/. nil is not an error — it means this build has no apply target, and
+	// the applier stays disabled.
+	ApplyExecutor ToolExecutor
 	// Completer is the model the stages call. It is reused from the knowledge
 	// layer's ProviderCompleter rather than built here, so a deployment has one
 	// answer to "which model does background work use".
@@ -186,16 +199,18 @@ func BuildModeling(in ModelingInput) (ModelingComponents, error) {
 	}
 	components.Runner = runner
 
-	// 6: the applier, and only if there is somewhere to apply to. An empty QemuRoot
-	// leaves DisabledApplier in place, so `/modeling apply` reports that this build
-	// has no apply target instead of failing halfway through a write.
-	if strings.TrimSpace(cfg.QemuRoot) == "" {
+	// 6: the applier, and only if there is somewhere to apply to *and* an executor
+	// rooted there. Either one missing leaves DisabledApplier in place, so
+	// `/modeling apply` reports that this build has no apply target instead of
+	// failing halfway through a write — or worse, writing hw/... into the workspace
+	// because it borrowed the pipeline's executor.
+	if strings.TrimSpace(cfg.QemuRoot) == "" || in.ApplyExecutor == nil {
 		return components, nil
 	}
 	applier, err := modeling.NewApplier(modeling.ApplierOptions{
 		Projects:  projects,
 		Artifacts: artifacts,
-		Tools:     newModelingTools(in.Executor, in.NewID),
+		Tools:     newModelingTools(in.ApplyExecutor, in.NewID),
 		QemuRoot:  cfg.QemuRoot,
 		Now:       in.Now,
 		Logger:    in.Logger,
