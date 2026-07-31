@@ -418,6 +418,11 @@ func LoadEnv(lookup LookupEnv) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	// modeling config read
+	modelingConfig, err := loadModelingConfig(lookup, dataDir)
+	if err != nil {
+		return Config{}, err
+	}
 
 	// general config build
 	cfg := Config{
@@ -479,9 +484,10 @@ func LoadEnv(lookup LookupEnv) (Config, error) {
 			MaxAuditArgBytes: maxAuditArgs,
 			MaxAuditOutBytes: maxAuditOutput,
 		},
-		Skills: skillConfig,
-		Memory: memoryConfig,
-		Prompt: promptConfig,
+		Skills:   skillConfig,
+		Memory:   memoryConfig,
+		Prompt:   promptConfig,
+		Modeling: modelingConfig,
 	}
 
 	return cfg, nil

@@ -105,6 +105,68 @@ func TestRequestSinkStreamsChunksAndFinishes(t *testing.T) {
 	}
 }
 
+// TestRequestSinkHandlesStageEvents checks that a long modeling run reaches
+// Telegram as readable lines and that an unknown type still fails loudly: a
+// silently dropped event would make a stage look like it never ran.
+func TestRequestSinkHandlesStageEvents(t *testing.T) {
+	client := &fakeClient{}
+	factory, err := NewEventSinkFactory(client, SinkConfig{EditInterval: time.Hour, ChunkSize: 4000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink, _ := factory.New(Target{ChatID: 10})
+	ctx := context.Background()
+	for _, event := range []runstream.Event{
+		{Sequence: 1, Type: runstream.EventRunStarted},
+		{Sequence: 2, Type: runstream.EventStageStarted, Stage: "extract"},
+		{Sequence: 3, Type: runstream.EventStageProgress, Stage: "extract", Text: "18 registers"},
+		{Sequence: 4, Type: runstream.EventStageCompleted, Stage: "extract", Text: "wrote reg-ir.json"},
+		{Sequence: 5, Type: runstream.EventRunCompleted},
+	} {
+		if err := sink.Emit(ctx, event); err != nil {
+			t.Fatalf("emit %s: %v", event.Type, err)
+		}
+	}
+	if err := sink.Finish(ctx); err != nil {
+		t.Fatal(err)
+	}
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if len(client.sent) != 1 {
+		t.Fatalf("sent=%#v; a stage run belongs in one message that gets edited", client.sent)
+	}
+	// Progress is delivered by editing the same message, which is why the final
+	// text — not the first send — is what a user ends up reading.
+	want := "[stage] extract started\n[stage] extract: 18 registers\n[stage] extract done: wrote reg-ir.json\n"
+	if len(client.edited) == 0 || client.edited[len(client.edited)-1].Text != want {
+		t.Fatalf("edited=%#v want last=%q", client.edited, want)
+	}
+	// A stage run renders something, but it is not streamed assistant text, so the
+	// channel still delivers the command's own reply.
+	if sink.StreamedText() {
+		t.Fatal("StreamedText=true for stage events")
+	}
+	if !sink.Rendered() {
+		t.Fatal("Rendered=false")
+	}
+}
+
+func TestRequestSinkRejectsUnknownEvent(t *testing.T) {
+	client := &fakeClient{}
+	factory, err := NewEventSinkFactory(client, SinkConfig{EditInterval: time.Hour, ChunkSize: 4000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink, _ := factory.New(Target{ChatID: 10})
+	ctx := context.Background()
+	if err := sink.Emit(ctx, runstream.Event{Sequence: 1, Type: runstream.EventRunStarted}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.Emit(ctx, runstream.Event{Sequence: 2, Type: runstream.EventType("stage_polished"), Stage: "plan"}); err == nil {
+		t.Fatal("unknown event type error=nil")
+	}
+}
+
 type handlerFunc func(context.Context, channel.Request) (channel.Outbound, error)
 
 func (f handlerFunc) Handle(ctx context.Context, req channel.Request) (channel.Outbound, error) {

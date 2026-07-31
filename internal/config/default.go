@@ -67,6 +67,17 @@ const (
 	DefaultPromptMaxBytes       = 40 * 1024
 	DefaultPromptMaxMemoryItems = DefaultMemoryTopK
 	MaxMemoryTopK               = 100
+
+	// Modeling default. Disabled by default because I8 writes into a QEMU
+	// source tree, which is outside the workspace sandbox; AutoApply is off for
+	// the same reason — Emit produces a staged plan, and landing it is a
+	// separate, approved step.
+	DefaultModelingEnabled       = false
+	DefaultModelingMaxProjects   = 1000
+	DefaultModelingArtifactBytes = 1 << 20
+	DefaultModelingProjectBytes  = 8 << 20
+	DefaultModelingStageTimeout  = 10 * time.Minute
+	DefaultModelingAutoApply     = false
 )
 
 const DefaultToolTimeout = 60 * time.Second

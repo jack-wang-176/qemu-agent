@@ -23,6 +23,10 @@ type Summary struct {
 	MemoryDir              string
 	MemoryTopK             int
 	AutoExtract            bool
+	ModelingEnabled        bool
+	ModelingDir            string
+	ModelingQemuRoot       string
+	ModelingAutoApply      bool
 }
 
 func (c Config) Summary() Summary {
@@ -48,5 +52,9 @@ func (c Config) Summary() Summary {
 		MemoryDir:              c.Memory.Dir,
 		MemoryTopK:             c.Memory.TopK,
 		AutoExtract:            c.Memory.AutoExtract,
+		ModelingEnabled:        c.Modeling.Enabled,
+		ModelingDir:            c.Modeling.Dir,
+		ModelingQemuRoot:       c.Modeling.QemuRoot,
+		ModelingAutoApply:      c.Modeling.AutoApply,
 	}
 }

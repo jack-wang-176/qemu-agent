@@ -77,6 +77,8 @@ func TestNewCommandRouterRejectsNilDependencies(t *testing.T) {
 		func(d *CommandDependencies) { d.Skills = nil },
 		func(d *CommandDependencies) { d.Memories = nil },
 		func(d *CommandDependencies) { d.Candidates = nil },
+		func(d *CommandDependencies) { d.Modeling = nil },
+		func(d *CommandDependencies) { d.Apply = nil },
 	} {
 		deps := full
 		mutate(&deps)

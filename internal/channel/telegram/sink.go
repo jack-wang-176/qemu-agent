@@ -105,6 +105,21 @@ func (s *requestSink) Emit(ctx context.Context, event runstream.Event) error {
 			status = "failed"
 		}
 		s.appendLine("[tool] " + event.ToolName + " " + status)
+	case runstream.EventStageStarted:
+		if !s.started || s.terminal {
+			return errors.New("telegram stage_started outside active run")
+		}
+		s.appendLine("[stage] " + event.Stage + " started")
+	case runstream.EventStageProgress:
+		if !s.started || s.terminal {
+			return errors.New("telegram stage_progress outside active run")
+		}
+		s.appendLine("[stage] " + event.Stage + ": " + event.Text)
+	case runstream.EventStageCompleted:
+		if !s.started || s.terminal {
+			return errors.New("telegram stage_completed outside active run")
+		}
+		s.appendLine(stageOutcomeLine(event))
 	case runstream.EventRunCompleted:
 		if !s.started || s.terminal {
 			return errors.New("invalid telegram run_completed")
@@ -123,6 +138,26 @@ func (s *requestSink) Emit(ctx context.Context, event runstream.Event) error {
 		return s.flushLocked(ctx)
 	}
 	return nil
+}
+
+// stageOutcomeLine renders the three ways a stage can end. Blocked is a normal
+// outcome of the emit stage — the diff is ready and waiting for approval — so it
+// is worded differently from a failure on purpose.
+func stageOutcomeLine(event runstream.Event) string {
+	switch {
+	case event.ErrorKind != "":
+		return "[stage] " + event.Stage + " failed: " + event.Summary
+	case event.Summary != "":
+		line := "[stage] " + event.Stage + " blocked: " + event.Summary
+		if event.Text != "" {
+			line += " — " + event.Text
+		}
+		return line
+	case event.Text != "":
+		return "[stage] " + event.Stage + " done: " + event.Text
+	default:
+		return "[stage] " + event.Stage + " done"
+	}
 }
 
 func (s *requestSink) appendLine(text string) {
