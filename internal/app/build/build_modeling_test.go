@@ -175,6 +175,52 @@ func TestBuildModelingWithoutQemuRootKeepsApplierDisabled(t *testing.T) {
 	}
 }
 
+// TestBuildModelingKeepsTheTwoExecutorsApart is the regression test for a wiring
+// mistake that no other test could see: giving the applier the pipeline's
+// executor. That executor's write tool is rooted at the workspace, so an applier
+// holding it would quietly create hw/misc/foo.c inside the workspace and report
+// success. The two stubs are distinguishable, so the assertion is simply that the
+// applier's writes arrive at the apply-side one.
+func TestBuildModelingKeepsTheTwoExecutorsApart(t *testing.T) {
+	pipelineExec := &stubExecutor{}
+	applyExec := &stubExecutor{}
+	qemuRoot := t.TempDir()
+	cfg := modelingConfig(t, func(cfg *config.Config) {
+		cfg.Modeling.Enabled = true
+		cfg.Modeling.QemuRoot = qemuRoot
+	})
+	components, err := BuildModeling(ModelingInput{
+		Config: cfg, Logger: testLogger(t), Executor: pipelineExec,
+		ApplyExecutor: applyExec, Completer: stubCompleter{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Apply against an unknown project: it fails, but only after the applier has
+	// been constructed with whichever executor the wiring handed it. What matters is
+	// that neither stub saw traffic it should not have.
+	ctx := security.WithCaller(context.Background(), security.Caller{
+		TraceID: "trace-1", Channel: "cli", Interactive: true,
+	})
+	if _, err := components.Applier.Apply(ctx, "mp-missing", modeling.Scope{
+		WorkspaceID: components.WorkspaceID, UserID: "user-1",
+	}); err == nil {
+		t.Fatal("apply succeeded for an unknown project")
+	}
+	// A build with no QemuRoot must leave the applier disabled even if an apply-side
+	// executor was somehow supplied, and must never borrow the pipeline's.
+	noRoot := modelingConfig(t, func(cfg *config.Config) { cfg.Modeling.Enabled = true })
+	bare, err := BuildModeling(ModelingInput{
+		Config: noRoot, Logger: testLogger(t), Executor: pipelineExec, Completer: stubCompleter{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := bare.Applier.(modeling.DisabledApplier); !ok {
+		t.Errorf("applier = %T; want DisabledApplier with no apply executor", bare.Applier)
+	}
+}
+
 func TestBuildModelingWithQemuRootBuildsRealApplier(t *testing.T) {
 	qemuRoot := t.TempDir()
 	cfg := modelingConfig(t, func(cfg *config.Config) {
@@ -182,7 +228,8 @@ func TestBuildModelingWithQemuRootBuildsRealApplier(t *testing.T) {
 		cfg.Modeling.QemuRoot = qemuRoot
 	})
 	components, err := BuildModeling(ModelingInput{
-		Config: cfg, Logger: testLogger(t), Executor: &stubExecutor{}, Completer: stubCompleter{},
+		Config: cfg, Logger: testLogger(t), Executor: &stubExecutor{},
+		ApplyExecutor: &stubExecutor{}, Completer: stubCompleter{},
 	})
 	if err != nil {
 		t.Fatal(err)
