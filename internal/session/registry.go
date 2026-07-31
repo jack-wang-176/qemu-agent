@@ -25,10 +25,12 @@ type Factory interface {
 // Registry maps external session keys to process-local sessions. The map lock
 // protects entries only; each entry serializes one session key independently.
 type Registry struct {
-	mu      sync.RWMutex
-	entries map[string]*entry
-	store   Store
-	factory Factory
+	mu             sync.RWMutex
+	entries        map[string]*entry
+	store          Store
+	factory        Factory
+	models         llm.ModelResolver
+	legacyProvider string
 }
 
 type entry struct {
@@ -37,14 +39,20 @@ type entry struct {
 	session   *Session
 }
 
-func NewRegistry(store Store, factory Factory) (*Registry, error) {
+func NewRegistry(store Store, factory Factory, models llm.ModelResolver, legacyProvider string) (*Registry, error) {
 	if store == nil {
 		return nil, errors.New("session registry store is nil")
 	}
 	if factory == nil {
 		return nil, errors.New("session registry factory is nil")
 	}
-	return &Registry{entries: make(map[string]*entry), store: store, factory: factory}, nil
+	if models == nil {
+		return nil, errors.New("session registry model resolver is nil")
+	}
+	if strings.TrimSpace(legacyProvider) == "" {
+		return nil, errors.New("session registry legacy provider is empty")
+	}
+	return &Registry{entries: make(map[string]*entry), store: store, factory: factory, models: models, legacyProvider: strings.ToLower(strings.TrimSpace(legacyProvider))}, nil
 }
 
 func validateKey(key string) error {
@@ -64,7 +72,7 @@ func validateSession(sess *Session) error {
 	if strings.TrimSpace(sess.TraceID) == "" {
 		return errors.New("session trace id is empty")
 	}
-	if strings.TrimSpace(sess.Model) == "" {
+	if strings.TrimSpace(sess.ModelRef.Model) == "" {
 		return errors.New("session model is empty")
 	}
 	return nil
@@ -219,6 +227,17 @@ func (r *Registry) Resume(ctx context.Context, key, id string) (*Session, error)
 	if err := validateSession(loaded); err != nil {
 		return nil, fmt.Errorf("validate session %q: %w", id, err)
 	}
+	if loaded.ModelRef.Provider == "" {
+		loaded.ModelRef.Provider = r.legacyProvider
+	}
+	ref, err := llm.NormalizeModelRef(loaded.ModelRef)
+	if err != nil {
+		return nil, fmt.Errorf("normalize session %q model: %w", id, err)
+	}
+	loaded.ModelRef = ref
+	if _, err := r.models.Resolve(ref); err != nil {
+		return nil, fmt.Errorf("resolve session %q model %q: %w", id, ref.String(), err)
+	}
 	item.session = loaded
 	item.sessionID = loaded.ID
 	return cloneSession(loaded), nil
@@ -244,7 +263,7 @@ func (r *Registry) Reset(ctx context.Context, key string) (*Session, error) {
 	reset := &Session{
 		ID:         item.session.ID,
 		TraceID:    item.session.TraceID,
-		Model:      item.session.Model,
+		ModelRef:   item.session.ModelRef,
 		Messages:   systemMessages(item.session.Messages),
 		TokenUsage: 0,
 		CreatedAt:  item.session.CreatedAt,

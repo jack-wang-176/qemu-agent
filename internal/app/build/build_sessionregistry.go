@@ -3,19 +3,19 @@ package build
 import (
 	"fmt"
 
-	"github.com/jack-wang-176/qemu-agent/internal/config"
+	"github.com/jack-wang-176/qemu-agent/internal/llm"
 	"github.com/jack-wang-176/qemu-agent/internal/session"
 )
 
-func BuildSessionRegistry(agentConfig config.AgentConfig, store session.Store, systemPrompt string) (*session.Registry, error) {
+func BuildSessionRegistry(defaultRef llm.ModelRef, models llm.ModelResolver, store session.Store, systemPrompt string) (*session.Registry, error) {
 	factory, err := session.NewDefaultFactory(session.Defaults{
-		Model:        agentConfig.Model,
+		ModelRef:     defaultRef,
 		SystemPrompt: systemPrompt,
 	}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build session factory: %w", err)
 	}
-	registry, err := session.NewRegistry(store, factory)
+	registry, err := session.NewRegistry(store, factory, models, defaultRef.Provider)
 	if err != nil {
 		return nil, fmt.Errorf("build session registry: %w", err)
 	}

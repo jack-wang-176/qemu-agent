@@ -55,28 +55,74 @@ func (c Config) Validate() error {
 	if c.Agent.Stream {
 		return errors.New("QEMU_AGENT_STREAM=true is not supported yet")
 	}
+	if len(c.Models.Definitions) == 0 {
+		return errors.New("no models configured")
+	}
+	defaultKey := strings.ToLower(strings.TrimSpace(c.Agent.Provider)) + ":" + strings.TrimSpace(c.Agent.Model)
+	refs := make(map[string]struct{}, len(c.Models.Definitions))
+	aliases := make(map[string]struct{})
+	for index, def := range c.Models.Definitions {
+		provider := strings.ToLower(strings.TrimSpace(def.Provider))
+		name := strings.TrimSpace(def.Name)
+		if provider == "" || name == "" {
+			return fmt.Errorf("model definition %d provider/name is empty", index)
+		}
+		if strings.ContainsAny(provider, ":/ \t\r\n") {
+			return fmt.Errorf("model definition %d has invalid provider %q", index, def.Provider)
+		}
+		if def.MaxContext <= 0 {
+			return fmt.Errorf("model %q max context must be > 0", provider+":"+name)
+		}
+		if def.MaxOutput < 0 || def.MaxOutput >= def.MaxContext {
+			return fmt.Errorf("model %q max output must be >= 0 and < max context", provider+":"+name)
+		}
+		key := provider + ":" + name
+		if _, exists := refs[key]; exists {
+			return fmt.Errorf("duplicate model definition %q", key)
+		}
+		refs[key] = struct{}{}
+		for _, rawAlias := range def.Aliases {
+			alias := strings.ToLower(strings.TrimSpace(rawAlias))
+			if alias == "" || strings.ContainsAny(alias, " :/\t\r\n") {
+				return fmt.Errorf("model %q has invalid alias %q", key, rawAlias)
+			}
+			if _, exists := aliases[alias]; exists {
+				return fmt.Errorf("duplicate model alias %q", alias)
+			}
+			aliases[alias] = struct{}{}
+		}
+	}
+	if _, exists := refs[defaultKey]; !exists {
+		return fmt.Errorf("default model %q is not registered", defaultKey)
+	}
 
-	switch c.Agent.Provider {
-	case "openrouter":
-		if c.Providers.OpenRouter.APIKey == "" {
-			return errors.New("OPENROUTER_API_KEY is required")
+	providers := make(map[string]struct{})
+	for _, def := range c.Models.Definitions {
+		providers[strings.ToLower(strings.TrimSpace(def.Provider))] = struct{}{}
+	}
+	for provider := range providers {
+		switch provider {
+		case "openrouter":
+			if c.Providers.OpenRouter.APIKey == "" {
+				return errors.New("OPENROUTER_API_KEY is required")
+			}
+			if err := validateBaseURL("OPENROUTER_BASE_URL", c.Providers.OpenRouter.BaseURL); err != nil {
+				return err
+			}
+		case "openai":
+			if c.Providers.OpenAI.APIKey == "" {
+				return errors.New("OPENAI_API_KEY is required")
+			}
+			if err := validateBaseURL("OPENAI_BASE_URL", c.Providers.OpenAI.BaseURL); err != nil {
+				return err
+			}
+		case "ollama":
+			if err := validateBaseURL("OLLAMA_BASE_URL", c.Providers.Ollama.BaseURL); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("unsupported provider %q", provider)
 		}
-		if err := validateBaseURL("OPENROUTER_BASE_URL", c.Providers.OpenRouter.BaseURL); err != nil {
-			return err
-		}
-	case "openai":
-		if c.Providers.OpenAI.APIKey == "" {
-			return errors.New("OPENAI_API_KEY is required")
-		}
-		if err := validateBaseURL("OPENAI_BASE_URL", c.Providers.OpenAI.BaseURL); err != nil {
-			return err
-		}
-	case "ollama":
-		if err := validateBaseURL("OLLAMA_BASE_URL", c.Providers.Ollama.BaseURL); err != nil {
-			return err
-		}
-	default:
-		return fmt.Errorf("unsupported provider %q", c.Agent.Provider)
 	}
 
 	switch c.Log.Level {
