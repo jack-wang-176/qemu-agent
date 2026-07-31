@@ -129,9 +129,16 @@ func writeArgs(arguments string) (string, string, error) {
 }
 
 // modelingHarness is the whole wired layer plus the seams a test asserts on.
+//
+// There are two executors because production has two: the pipeline's is rooted at
+// the workspace so extract can read a datasheet, the applier's at the QEMU tree so
+// a write can create hw/misc/foo.c. Keeping them distinct here is what lets the
+// test assert that each tool arrived at the right one — a single shared double
+// would pass no matter which root the wiring chose.
 type modelingHarness struct {
 	components build.ModelingComponents
 	executor   *recordingExecutor
+	applyExec  *recordingExecutor
 	completer  *scriptedCompleter
 	config     config.Config
 	qemuRoot   string
@@ -191,7 +198,10 @@ func newModelingHarness(t *testing.T) *modelingHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	executor := &recordingExecutor{root: resolvedRoot}
+	// The pipeline's double gets no root: it only ever reads and shells out, and a
+	// write arriving here would mean the applier borrowed the wrong executor.
+	executor := &recordingExecutor{}
+	applyExec := &recordingExecutor{root: resolvedRoot}
 	completer := &scriptedCompleter{replies: []string{
 		// plan: prose, consumed as the plan artifact.
 		"1. map CTRL/STATUS/DATA\n2. one irq line\n",
@@ -202,14 +212,15 @@ func newModelingHarness(t *testing.T) *modelingHarness {
 		integrationIR,
 	}}
 	components, err := build.BuildModeling(build.ModelingInput{
-		Config: cfg, Logger: testLogger(), Executor: executor, Completer: completer,
+		Config: cfg, Logger: testLogger(), Executor: executor,
+		ApplyExecutor: applyExec, Completer: completer,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return &modelingHarness{
-		components: components, executor: executor, completer: completer,
-		config: cfg, qemuRoot: qemuRoot, datasheet: datasheet,
+		components: components, executor: executor, applyExec: applyExec,
+		completer: completer, config: cfg, qemuRoot: qemuRoot, datasheet: datasheet,
 	}
 }
 
@@ -378,16 +389,24 @@ func TestModelingPipelineEndToEnd(t *testing.T) {
 		t.Errorf("final status = %q; want done", final.Status)
 	}
 
-	// (d) the executor saw every side effect, and only the three expected tools.
+	// (d) each executor saw only the tools its root can serve. The applier's must
+	// have seen the writes; the pipeline's must not have, because a write arriving at
+	// a workspace-rooted tool would land device code outside the QEMU tree.
+	if applyCalls := uniqueSorted(harness.applyExec.names); !contains(applyCalls, "write") {
+		t.Errorf("apply executor never saw a write; calls = %v", applyCalls)
+	}
 	unique := uniqueSorted(harness.executor.names)
-	for _, want := range []string{"bash", "write"} {
+	for _, want := range []string{"read", "bash"} {
 		if !contains(unique, want) {
-			t.Errorf("executor never saw %q; calls = %v", want, unique)
+			t.Errorf("pipeline executor never saw %q; calls = %v", want, unique)
 		}
+	}
+	if contains(unique, "write") {
+		t.Error("pipeline executor saw a write; the applier must use its own root")
 	}
 	for _, name := range unique {
 		switch name {
-		case "read", "bash", "write":
+		case "read", "bash":
 		default:
 			t.Errorf("executor saw an unexpected tool %q", name)
 		}
@@ -413,7 +432,8 @@ func TestModelingRestartSeesTheSameProject(t *testing.T) {
 
 	restarted, err := build.BuildModeling(build.ModelingInput{
 		Config: harness.config, Logger: testLogger(),
-		Executor: harness.executor, Completer: harness.completer,
+		Executor: harness.executor, ApplyExecutor: harness.applyExec,
+		Completer: harness.completer,
 	})
 	if err != nil {
 		t.Fatal(err)

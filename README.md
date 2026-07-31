@@ -7,95 +7,198 @@
 
 当前版本：**preview 2.0**（I1–I8 全部落地）。
 
-## 当前能力
+---
 
-| 能力 | 说明 | 默认 |
-|---|---|---|
-| Agent loop | OpenAI 兼容协议（默认 OpenRouter），tool calling | 开 |
-| 会话管理 | 多会话注册表、持久化、`/resume`、自动压缩上下文 | 开 |
-| 安全工具执行 | 所有副作用经 `security.Executor`：策略判定 → 人工审批 → JSONL 审计 | 开 |
-| 内置工具 | `read` / `write` / `bash`，均限制在 workspace 内 | 开 |
-| 模型注册表 | 多 provider / 多模型，运行期 `/model` 切换 | 开 |
-| 请求级事件流 | `run_started` / `turn_started` / `tool_*` / `stage_*` / `run_completed`，CLI 与 Telegram 各自渲染（`text_delta` 需流式，暂未启用） | 开 |
-| Telegram 渠道 | 白名单用户、并发限制、消息分片 | 关 |
-| Skills | 操作员放置的 SKILL.md，索引进系统提示词，模型用 `use_skill` 取正文 | 开 |
-| Memory | `/remember` 手工记忆 + 可选自动抽取候选、人工审批后入库 | 开 |
-| **Modeling 流水线** | **五阶段外设建模：plan → extract → infer → emit → verify，产物内容寻址、落地需人工审批** | **关** |
+# 快速开始
 
-### Modeling 流水线是什么
+## 0. 前置条件
 
-把一份 datasheet 变成一个可编译、可 qtest 的 QEMU 外设，拆成五个可中断、可重跑、每步都留证据的阶段：
+- **Go 1.26+**（`go.mod` 声明 `go 1.26.0`）
+- 一个模型来源，任选其一：
+  - OpenRouter API key（默认，最省事）
+  - OpenAI API key
+  - 本地 Ollama（**不需要 key**）
+
+无需 `make`，项目没有 Makefile，全部用标准 go 命令。
+
+## 1. 三十秒跑起来
+
+```bash
+cd qemu-agent
+export OPENROUTER_API_KEY=sk-or-v1-...     # 必填，否则启动即报 "OPENROUTER_API_KEY is required"
+go run ./cmd/qemu-agent
+```
+
+看到 `> ` 提示符就成功了。输入 `/help` 看全部命令，`/exit` 或 Ctrl-D 退出。
+
+想只问一句就退出（脚本友好）：
+
+```bash
+go run ./cmd/qemu-agent -p "列出 hw/misc 下的设备文件"
+```
+
+编译成二进制再用（推荐日常使用，启动快）：
+
+```bash
+go build -o bin/qemu-agent ./cmd/qemu-agent
+./bin/qemu-agent
+```
+
+## 2. 用本地 Ollama（不花钱、不联网）
+
+```bash
+ollama serve                                # 另开一个终端
+ollama pull qwen2.5-coder:7b
+
+export QEMU_AGENT_PROVIDER=ollama
+export QEMU_AGENT_MODEL=qwen2.5-coder:7b
+go run ./cmd/qemu-agent
+```
+
+Ollama 走本地 `http://localhost:11434/v1`，不需要任何 API key。
+
+## 3. 命令行 flag
+
+| flag | 作用 |
+|---|---|
+| `-p <prompt>` | 单次执行模式：跑完这一句就退出，不进 REPL |
+| `-model <name>` | 覆盖本次运行的模型 |
+| `-provider <name>` | 覆盖 provider：`openrouter` / `openai` / `ollama` |
+| `-max-turns <n>` | 覆盖单次请求最大轮数 |
+
+## 4. 数据落在哪
+
+| 内容 | 位置 |
+|---|---|
+| 会话 / skill / memory / modeling | `<用户配置目录>/qemu-agent/`，用 `QEMU_AGENT_DATA_DIR` 覆盖 |
+| 工具审计日志 | `<DataDir>/audit/tools.jsonl`，每次工具调用一行 |
+| 工具可读写范围 | **仅** `QEMU_AGENT_WORKSPACE`（默认当前目录） |
+
+用户配置目录在 macOS 是 `~/Library/Application Support`，Linux 是 `~/.config`。
+
+第一次运行会自己建目录，不用手工准备。想换个干净环境试，指一个临时目录就行：
+
+```bash
+QEMU_AGENT_DATA_DIR=/tmp/qa-data QEMU_AGENT_WORKSPACE=/tmp/qa-ws go run ./cmd/qemu-agent
+```
+
+工具被限制在 workspace 内是硬约束：`read` / `write` / `bash` 都拿不到 workspace 之外的路径。
+所以**如果你想让 agent 读你的 QEMU 代码，就把 workspace 指到 QEMU 树**：
+
+```bash
+QEMU_AGENT_WORKSPACE=/path/to/qemu go run ./cmd/qemu-agent
+```
+
+## 5. 危险操作会停下来问你
+
+默认 `ask-dangerous` 模式：`write` 和 `bash` 这类有副作用的工具在执行前会在终端弹出审批，
+你回车确认或拒绝。所以**建议在交互式终端里用**——非交互渠道无人可问，一律 fail-closed 拒绝。
+
+```bash
+export QEMU_AGENT_TOOL_APPROVAL_TIMEOUT=5m    # 默认 5 分钟，超时视为拒绝
+```
+
+---
+
+# 运行 Modeling 流水线
+
+这是本项目的核心能力，**默认关闭**。
+
+## 为什么默认关
+
+它比其它能力多一个危险维度：要写 **QEMU 源码树**，那不是 agent 私有的沙箱。
+所以启用需要你显式给出落地目标，并且落地这一步永远需要人工逐个批准。
+
+## 1. 启用
+
+```bash
+export OPENROUTER_API_KEY=sk-or-v1-...
+export QEMU_AGENT_MODELING_ENABLED=true
+export QEMU_AGENT_MODELING_QEMU_ROOT=/path/to/qemu          # 你的 QEMU 源码树
+export QEMU_AGENT_MODELING_BUILD_DIR=/path/to/qemu/build    # verify 用，需已 configure 过
+export QEMU_AGENT_WORKSPACE=/path/to/datasheets             # datasheet 放这儿，agent 才读得到
+go run ./cmd/qemu-agent
+```
+
+两个路径都可以留空，对应不同的能力档位：
+
+| 配置 | 能做什么 |
+|---|---|
+| 全不给 | `/modeling` 回答 `modeling is disabled` |
+| 只给 `ENABLED` | 能规划、抽 Reg-IR、生成代码、出 diff；`apply` 回答 `modeling apply is not available in this configuration` |
+| 加 `QEMU_ROOT` | 能 `apply` 落地 |
+| 再加 `BUILD_DIR` | 能 `verify` 跑 ninja + qtest |
+
+只给 `ENABLED` 是个真实可用的档位：在一台没有 QEMU checkout 的机器上读数据手册、产出
+Reg-IR 和 C 代码，最后把 diff 拷走。流水线读数据手册用的是 **workspace** 根，`apply`
+写文件用的是 **QEMU 树**根——两套工具根，所以少配一个不会让另一个失效。
+
+`BUILD_DIR` 必须是**你自己已经 configure 好**的构建目录。配置 QEMU 需要只有你知道的参数
+（target 列表、交叉编译器），流水线不会替你跑 `configure`，否则会构建出没人要的东西：
+
+```bash
+cd /path/to/qemu && mkdir -p build && cd build
+../configure --target-list=riscv64-softmmu --enable-debug
+```
+
+## 2. 五个阶段
 
 ```text
 plan     读需求与 skill，产出建模计划
 extract  从 datasheet / 头文件抽出 Reg-IR（寄存器映射的结构化表示）
 infer    补齐行为语义：复位值、副作用、中断
 emit     生成 C 代码到暂存区，产出 diff 与 apply manifest —— 此时 QEMU 树零变化
-verify   在已配置好的 build 目录跑 ninja 与 qtest，产出 Evidence
+verify   在 build 目录跑 ninja 与 qtest，产出 Evidence
 ```
 
-三条贯穿始终的规则：
-
-1. **emit 不落地。** 生成的代码进内容寻址的产物库，不进 QEMU 源码树。要落地必须显式 `/modeling apply`，它需要交互式渠道（有人能看 diff 并逐个批准写入），并且每次写入都经过 `security.Executor`。
-2. **建模产物永不自动进系统提示词。** 阶段结论是模型自己写的内容，回灌等于让它把自己的猜测当成事实。
-3. **错误只报类别，不回显内容。** datasheet 片段、模型原文、工具 stdout 一律不进日志、不进项目记录、不进渠道回复。
-
-## 运行
-
-### 1. 最小启动
-
-```bash
-export OPENROUTER_API_KEY=sk-...          # 必填
-go run ./cmd/qemu-agent                   # 交互式 REPL
-go run ./cmd/qemu-agent -p "读一下 hw/misc 下有哪些设备"   # 单次执行
-```
-
-可用 flag：`-p <prompt>`、`-model`、`-provider`、`-max-turns`。
-
-数据默认落在用户配置目录下的 `qemu-agent/`（macOS 是
-`~/Library/Application Support/qemu-agent`，Linux 是 `~/.config/qemu-agent`），
-可用 `QEMU_AGENT_DATA_DIR` 覆盖；workspace 默认是当前目录（`QEMU_AGENT_WORKSPACE`）——
-工具只能读写 workspace 之内的路径。
-
-### 2. 启用 Modeling 流水线
-
-Modeling 默认关闭，因为它比其它能力多一个危险维度：它要写 **QEMU 源码树**，
-那不是 agent 私有的沙箱。启用需要显式给出落地目标：
-
-```bash
-export OPENROUTER_API_KEY=sk-...
-export QEMU_AGENT_MODELING_ENABLED=true
-export QEMU_AGENT_MODELING_QEMU_ROOT=/path/to/qemu        # 你的 QEMU 源码树
-export QEMU_AGENT_MODELING_BUILD_DIR=/path/to/qemu/build  # verify 用，需已 configure 过
-go run ./cmd/qemu-agent
-```
-
-`QEMU_AGENT_MODELING_BUILD_DIR` 必须是**你自己已经 configure 好**的构建目录：
-配置 QEMU 需要只有操作员知道的参数（target 列表、交叉编译器），流水线不会替你跑
-`configure`，否则会构建出没人要的东西。留空则 verify 阶段不可用，其余阶段照常工作。
-
-同理，`QEMU_AGENT_MODELING_QEMU_ROOT` 留空是合法的：此时能规划、能抽 Reg-IR、能生成代码，
-只是 `apply` 会明确回答"这个构建没有配置 QEMU 源码树"，而不是写到一半失败。
-
-### 3. 走一遍完整流程
+## 3. 完整走一遍
 
 ```text
-/modeling new k230 rmu                                    # 建项目，返回 mp-xxxx
-/modeling advance mp-xxxx --source=/docs/k230-rmu.pdf.txt 把 RMU 建成 sysbus 设备
-/modeling advance mp-xxxx                                 # extract：抽 Reg-IR
-/modeling advance mp-xxxx                                 # infer：补行为语义
-/modeling advance mp-xxxx                                 # emit：生成代码，QEMU 树仍零变化
-/modeling show mp-xxxx                                    # 看状态与产物清单
-/modeling diff mp-xxxx                                    # 读 diff（人工审阅这一步是全部安全性的基础）
-/modeling apply mp-xxxx                                   # 落地，逐个文件弹审批
-/modeling advance mp-xxxx                                 # verify：ninja + qtest，产出 Evidence
-/modeling evidence mp-xxxx                                # 看构建与测试证据
+/modeling new k230 rmu
+  → created modeling project mp-a1b2c3d4e5f6a7b8 at stage plan (pending)
+
+/modeling advance mp-a1b2... --source=/path/to/datasheets/k230-rmu.txt 把 RMU 建成 sysbus 设备
+/modeling advance mp-a1b2...          # extract：抽 Reg-IR
+/modeling advance mp-a1b2...          # infer：补行为语义
+/modeling advance mp-a1b2...          # emit：生成代码；QEMU 树此刻仍零变化
+
+/modeling show mp-a1b2...             # 看状态与产物清单
+/modeling diff mp-a1b2...             # 读 diff ← 人工审阅这一步是全部安全性的基础
+/modeling apply mp-a1b2...            # 落地，逐个文件弹审批
+/modeling advance mp-a1b2...          # verify：ninja + qtest
+/modeling evidence mp-a1b2...         # 看构建与测试证据
 ```
 
-中途出错不用重开项目：`/modeling reset mp-xxxx <stage> --confirm=mp-xxxx` 回到某个阶段重跑，
-该阶段之后的产物会被清掉。进程被杀掉再启动，`/modeling show` 会显示上次死在哪个阶段。
+要点：
 
-### 4. 全部命令
+- `--source=` 只在 extract 需要，指向 datasheet 的**文本**文件（PDF 请先转成文本），
+  且必须在 workspace 之内。
+- `emit` 跑完项目停在 `blocked / awaiting_apply`——这不是错误，是在等你审 diff。
+  此时再 `advance` 会重跑 emit，而不是往下走；`verify` 只有 `apply` 之后才可达。
+- 中途出错不用重开项目：
+
+  ```text
+  /modeling reset mp-a1b2... extract --confirm=mp-a1b2...
+  ```
+
+  回到某个阶段重跑，该阶段之后的产物会被清掉。确认词就是项目 id 本身。
+- 进程被杀掉再启动，`/modeling show` 会告诉你上次死在哪个阶段。
+
+## 4. 三条安全规则
+
+1. **emit 不落地。** 生成的代码进内容寻址的产物库，不进 QEMU 源码树。要落地必须显式
+   `/modeling apply`，它需要交互式渠道（有人能看 diff 并逐个批准），每次写入都经过
+   `security.Executor`，和任何一次普通 `write` 受同样的策略与审计约束。
+2. **建模产物永不自动进系统提示词。** 阶段结论是模型自己写的内容，回灌等于让它把自己的
+   猜测当成事实。
+3. **错误只报类别，不回显内容。** datasheet 片段、模型原文、工具 stdout 一律不进日志、
+   不进项目记录、不进渠道回复。
+
+项目状态与产物以 `0700` / `0600` 落盘：项目标题和产物名描述的是未发布硬件。
+
+---
+
+# 全部命令
 
 ```text
 /help                                          列出命令
@@ -110,23 +213,40 @@ go run ./cmd/qemu-agent
 /exit
 ```
 
-## 配置
+# 当前能力
 
-全部配置只经环境变量，只由 `internal/config` 读取。常用项：
+| 能力 | 说明 | 默认 |
+|---|---|---|
+| Agent loop | OpenAI 兼容协议（默认 OpenRouter），tool calling | 开 |
+| 会话管理 | 多会话注册表、持久化、`/resume`、自动压缩上下文 | 开 |
+| 安全工具执行 | 所有副作用经 `security.Executor`：策略判定 → 人工审批 → JSONL 审计 | 开 |
+| 内置工具 | `read` / `write` / `bash`，均限制在 workspace 内 | 开 |
+| 模型注册表 | 多 provider / 多模型，运行期 `/model` 切换 | 开 |
+| 请求级事件流 | `run_started` / `turn_started` / `tool_*` / `stage_*` / `run_completed`，CLI 与 Telegram 各自渲染 | 开 |
+| Telegram 渠道 | 白名单用户、并发限制、消息分片 | 关 |
+| Skills | 操作员放置的 SKILL.md，索引进系统提示词，模型用 `use_skill` 取正文 | 开 |
+| Memory | `/remember` 手工记忆 + 可选自动抽取候选、人工审批后入库 | 开 |
+| **Modeling 流水线** | **五阶段外设建模，产物内容寻址、落地需人工审批** | **关** |
 
-### 模型与 provider
+流式输出（`QEMU_AGENT_STREAM`）尚未支持，置 `true` 会启动失败。
+
+# 配置速查
+
+全部配置只经环境变量，只由 `internal/config` 读取。
+
+## 模型与 provider
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `OPENROUTER_API_KEY` / `OPENAI_API_KEY` | — | 至少一个必填 |
+| `OPENROUTER_API_KEY` | — | provider 为 openrouter 时必填 |
+| `OPENAI_API_KEY` | — | provider 为 openai 时必填 |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | |
 | `QEMU_AGENT_PROVIDER` | `openrouter` | `openrouter` / `openai` / `ollama` |
 | `QEMU_AGENT_MODEL` | `openai/gpt-4o-mini` | |
 | `QEMU_AGENT_MODELS_JSON` | — | 自定义模型目录（JSON） |
-| `QEMU_AGENT_STREAM` | `false` | 尚未支持，置 `true` 会启动失败 |
 | `QEMU_AGENT_MAX_TURNS` | `15` | 单次请求最大轮数 |
 
-### 路径与上下文
+## 路径与上下文
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
@@ -135,7 +255,7 @@ go run ./cmd/qemu-agent
 | `QEMU_AGENT_MAX_CONTEXT_TOKENS` | `160000` | 超过则自动压缩 |
 | `QEMU_AGENT_KEEP_RECENT_TURNS` | `4` | 压缩时保留的完整轮数 |
 
-### 安全与审计
+## 安全与审计
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
@@ -146,7 +266,7 @@ go run ./cmd/qemu-agent
 
 审计日志能完整还原一次建模读了哪些文件、跑了哪些命令、写了哪些文件；参数与输出按上限截断并脱敏。
 
-### Modeling
+## Modeling
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
@@ -161,15 +281,28 @@ go run ./cmd/qemu-agent
 | `QEMU_AGENT_MODELING_MAX_PROJECT_BYTES` | `8 MiB` | 单项目产物总和上限 |
 | `QEMU_AGENT_MODELING_AUTO_APPLY` | `false` | 置 true 需同时给 QEMU_ROOT；**不建议** |
 
-项目状态与产物以 `0700` / `0600` 落盘：项目标题和产物名描述的是未发布硬件。
-
-### Skills / Memory / Telegram
+## Skills / Memory / Telegram
 
 `QEMU_AGENT_SKILLS_ENABLED`、`QEMU_AGENT_SKILLS_DIR`、`QEMU_AGENT_MEMORY_ENABLED`、
 `QEMU_AGENT_MEMORY_AUTO_EXTRACT`、`QEMU_AGENT_TELEGRAM_ENABLED`、`QEMU_AGENT_TELEGRAM_TOKEN`、
 `QEMU_AGENT_TELEGRAM_ALLOWED_USER_IDS` 等；完整清单见 `internal/config/`。
 
-## 目录结构
+# 排错
+
+| 现象 | 原因与解法 |
+|---|---|
+| `OPENROUTER_API_KEY is required` | 没设 key；或想用本地模型则设 `QEMU_AGENT_PROVIDER=ollama` |
+| `QEMU_AGENT_STREAM=true is not supported yet` | 流式尚未支持，去掉该变量 |
+| `modeling is disabled` | 设 `QEMU_AGENT_MODELING_ENABLED=true` 并重启 |
+| `apply is unavailable: this build has no QEMU source tree configured` | 没设 `QEMU_AGENT_MODELING_QEMU_ROOT` |
+| `modeling apply is not available in this configuration` | 同上，来自更底层：applier 本身是禁用实现 |
+| `apply needs an interactive channel` | 在交互式终端里跑，不要用管道或 `-p`（这条会先于上面两条触发） |
+| `extract needs at least one --source=<path> to read` | extract 阶段要 `--source=` 指向 datasheet 文本 |
+| extract 说读不到 `--source` 的文件 | datasheet 要放在 `QEMU_AGENT_WORKSPACE` 里，不是 QEMU 树里 |
+| 工具报路径不可达 | 目标不在 `QEMU_AGENT_WORKSPACE` 内；把 workspace 指对 |
+| `apply_rejected` | 常见于项目还没到 emit 阶段就 apply，或目标文件已存在 |
+
+# 项目结构
 
 ```text
 cmd/qemu-agent/          入口：flag 解析 → config → app.Build → Runtime.Run
@@ -192,7 +325,7 @@ internal/
 架构约束（不允许回退）：env 只由 `config` 读取；`app.Build` 是唯一实现选择点；
 `agent` 不知道 CLI/Telegram 的存在；工具没有 `Executor` 旁路；建模每阶段都有产物或证据。
 
-## 开发
+# 开发
 
 ```bash
 gofmt -l cmd internal     # 无输出
@@ -204,7 +337,3 @@ go build ./...            # 成功
 跨层集成测试见 `internal/app/modeling_integration_test.go`：用 stub 模型与
 recording executor 跑 `new → advance×4 → diff → apply → verify`，断言 apply 之前
 QEMU 树零变化、每阶段留下产物、进程重启后状态一致、executor 收到的调用集合没有旁路。
-
-## License
-
-继承自上游 codecrafters starter 模板（MIT 友好），仅供学习与研究。
