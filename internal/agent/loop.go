@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"strings"
 
 	"github.com/jack-wang-176/qemu-agent/internal/llm"
 	"github.com/jack-wang-176/qemu-agent/internal/session"
@@ -12,8 +12,17 @@ import (
 
 /* a certain run of agent,for a certain input.*/
 func (a *Agent) Run(ctx context.Context, s *session.Session, input string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	if s == nil {
 		return "", errors.New("session is nil")
+	}
+	if strings.TrimSpace(s.Model) == "" {
+		return "", errors.New("session model is empty")
+	}
+	if strings.TrimSpace(input) == "" {
+		return "", errors.New("input is empty")
 	}
 	if a.maxTurns <= 0 {
 		return "", errors.New("max turns must be positive")
@@ -24,7 +33,7 @@ func (a *Agent) Run(ctx context.Context, s *session.Session, input string) (stri
 		original := s.MessageCopy()
 		trimmed, used, err := a.ctxmgr.EnforceBudget(ctx, s.Model, original)
 		if err != nil {
-			log.Printf("context warning: %v", err)
+			a.logger.WarnContext(ctx, "enforce context budget", "err", err)
 		} else {
 			/* token limit hit replaced compacted.*/
 			s.MessageReplace(trimmed, used)
@@ -42,7 +51,7 @@ func (a *Agent) Run(ctx context.Context, s *session.Session, input string) (stri
 		s.AddAssistant(response.Message)
 		/* save session*/
 		if err := a.store.Save(ctx, s); err != nil {
-			return "", err
+			return "", fmt.Errorf("save assistant response: %w", err)
 		}
 		if len(response.Message.ToolCalls) == 0 {
 			return response.Message.Content, nil
@@ -56,7 +65,7 @@ func (a *Agent) Run(ctx context.Context, s *session.Session, input string) (stri
 			s.AddToolResult(out, call.ID)
 		}
 		if err := a.store.Save(ctx, s); err != nil {
-			return "", err
+			return "", fmt.Errorf("save tool results: %w", err)
 		}
 	}
 	return "", fmt.Errorf("reached max turns (%d)", a.maxTurns)

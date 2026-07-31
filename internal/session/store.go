@@ -105,7 +105,7 @@ func (f *FileStore) Load(ctx context.Context, id string) (*Session, error) {
 		return nil, err
 	}
 	if id == "" {
-		return nil, errors.New("invalid err")
+		return nil, errors.New("invalid session id")
 	}
 	data, err := os.ReadFile(filepath.Join(f.dir, id+".json"))
 	if err != nil {

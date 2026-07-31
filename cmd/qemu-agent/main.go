@@ -5,69 +5,115 @@ import (
 	_ "embed"
 	"flag"
 	"fmt"
-	"log"
+	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 
-	"github.com/jack-wang-176/qemu-agent/internal/agent"
-	"github.com/jack-wang-176/qemu-agent/internal/contextmgr"
-	"github.com/jack-wang-176/qemu-agent/internal/llm"
-	"github.com/jack-wang-176/qemu-agent/internal/session"
-	"github.com/jack-wang-176/qemu-agent/internal/tools"
-	"github.com/jack-wang-176/qemu-agent/internal/tools/builtin"
+	"github.com/google/uuid"
+	"github.com/jack-wang-176/qemu-agent/internal/app"
+	"github.com/jack-wang-176/qemu-agent/internal/config"
 )
 
 //go:embed system.md
 var systemPrompt string
 
+type flags struct {
+	Prompt   string
+	Provider string
+	Model    string
+	MaxTurns int
+}
+
+/* use flag input to parse flag struct. */
+func parseFlags(args []string, output io.Writer) (flags, map[string]bool, error) {
+	set := flag.NewFlagSet("qemu-agent", flag.ContinueOnError)
+	set.SetOutput(output)
+	var result flags
+	set.StringVar(&result.Prompt, "p", "", "prompt to send to the agent")
+	set.StringVar(&result.Provider, "provider", "", "override provider")
+	set.StringVar(&result.Model, "model", "", "override model")
+	set.IntVar(&result.MaxTurns, "max-turns", 0, "override maximum turns")
+	if err := set.Parse(args); err != nil {
+		return flags{}, nil, err
+	}
+	visited := make(map[string]bool)
+	set.Visit(func(item *flag.Flag) {
+		visited[item.Name] = true
+	})
+	return result, visited, nil
+}
+
+/* main supposed to be very simple. */
 func main() {
-	prompt := flag.String("p", "", "prompt to send to the agent")
-	maxTurns := flag.Int("max-turns", 15, "maximum agent turns")
-	flag.Parse()
-	if *prompt == "" {
-		log.Fatal("-p prompt is required")
+	os.Exit(run(os.Args[1:]))
+}
+
+/* run initialize certain run behavior*/
+func run(args []string) int {
+	flags, visited, err := parseFlags(args, os.Stderr)
+	if err != nil {
+		return 2
+	}
+	if flags.Prompt == "" {
+		fmt.Fprintln(os.Stderr, "-p prompt is required")
+		return 2
 	}
 
-	apiKey := os.Getenv("OPENROUTER_API_KEY")
-	if apiKey == "" {
-		log.Fatal("OPENROUTER_API_KEY is required")
-	}
-	baseURL := os.Getenv("OPENROUTER_BASE_URL")
-	if baseURL == "" {
-		baseURL = "https://openrouter.ai/api/v1"
-	}
-	model := os.Getenv("OPENROUTER_MODEL_NAME")
-	if model == "" {
-		model = "openai/gpt-4o-mini"
+	/* load config initializing config behavior/ */
+	cfg, err := config.LoadFromOS(flags.Overrides(visited))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	/* self-made build injection. */
+	runtime, err := app.Build(app.BuildInput{
+		Config:       cfg,
+		SystemPrompt: systemPrompt,
+		LogOutput:    os.Stderr,
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer runtime.Close()
+
+	ctx, stop := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGTERM,
+	)
 	defer stop()
-	provider := llm.NewOpenAIProvider("openrouter", apiKey, baseURL)
-	manager := tools.NewManager()
-	for _, t := range []tools.Tool{&builtin.ReadTool{}, &builtin.WriteTool{}, &builtin.BashTool{}} {
-		if err := manager.Register(t); err != nil {
-			log.Fatalf("register tool: %v", err)
-		}
-	}
-	tok, err := contextmgr.NewTokenizer(model)
+
+	answer, err := runtime.Application.RunOnce(
+		ctx,
+		newTraceID(),
+		flags.Prompt,
+	)
 	if err != nil {
-		log.Fatalf("create tokenizer: %v", err)
+		runtime.Logger.Error("run prompt", "err", err)
+		return 1
 	}
-	compactor := contextmgr.NewLLMSummarizer(provider, 4, model)
-	cm := contextmgr.NewCompactorManager(160000, *tok, compactor)
-	storeDir := filepath.Join(os.TempDir(), "qemu-agent", "sessions")
-	store := session.NewFileStore(storeDir)
-	ag, err := agent.New(provider, manager, &cm, store, model, *maxTurns)
-	if err != nil {
-		log.Fatalf("create agent: %v", err)
+
+	fmt.Fprint(os.Stdout, answer)
+	return 0
+}
+
+func (f flags) Overrides(visited map[string]bool) config.Overrides {
+	var result config.Overrides
+	if visited["provider"] {
+		result.Provider = &f.Provider
 	}
-	sess := session.NewSession("cli", systemPrompt, model)
-	answer, err := ag.Run(ctx, sess, *prompt)
-	if err != nil {
-		log.Fatal(err)
+	if visited["model"] {
+		result.Model = &f.Model
 	}
-	fmt.Print(answer)
+	if visited["max-turns"] {
+		result.MaxTurns = &f.MaxTurns
+	}
+	return result
+}
+
+func newTraceID() string {
+	return "cli-" + uuid.NewString()
 }
