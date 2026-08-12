@@ -33,9 +33,9 @@ func NewEffectAdapter(tools modeling.ToolRunner) *EffectAdapter {
 // pipelineapi.EffectRequest 携带 Name + Args + Caller；
 // 现有 modeling.ToolRunner.Run 接受 (name string, args map[string]any)，
 // 因此 Adapter：
-//   1. 把 EffectRequest.Args 当作 JSON map 传给 ToolRunner；
-//   2. Caller 在第一阶段不透传给 ToolRunner（current Pipeline 不用 caller identity）；
-//   3. ToolRunner 返回的 tools.ExecutionResult 映射为 EffectResult。
+//  1. 把 EffectRequest.Args 当作 JSON map 传给 ToolRunner；
+//  2. Caller 在第一阶段不透传给 ToolRunner（current Pipeline 不用 caller identity）；
+//  3. ToolRunner 返回的 tools.ExecutionResult 映射为 EffectResult。
 //
 // 注意：EffectRequest.Args 是 []byte（JSON）。
 // 这里先把它解析为 map[string]any 再传给 ToolRunner。

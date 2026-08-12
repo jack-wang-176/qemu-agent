@@ -2,7 +2,7 @@ package modelingapi
 
 // capability.go defines the discoverable capability contract.
 //
-// Design principles (v1-06, part 9):
+// Design principles :
 //   - The Engine supplies capabilities; A1 does not hard-code a global list.
 //   - Operation names are valid, unique, sorted, and defensively copied.
 //   - Capabilities never contain local paths or provider secrets.

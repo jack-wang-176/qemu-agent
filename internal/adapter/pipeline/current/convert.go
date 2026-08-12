@@ -22,7 +22,8 @@ import (
 // operationToStage 把 pipelineapi.OperationName 映射为 modeling.Stage。
 //
 // 当前 five operations 与 Stage 一一对应：
-//   plan / extract / infer / emit / verify
+//
+//	plan / extract / infer / emit / verify
 //
 // 空 operation 不允许进入 Execute —— 调用者应在 modelingapp 层
 // 决定 "current/recommended" 后再调用 Engine。
@@ -55,7 +56,7 @@ func stageToOperation(s modeling.Stage) pipelineapi.OperationName {
 // modeling.Scope 是 {WorkspaceID, UserID} 元组。
 // 当前 Adapter 用 Scope 字符串作为 WorkspaceID；UserID 暂留空（current Pipeline 不强校验 owner）。
 func toModelingScope(s pipelineapi.Scope) modeling.Scope {
-	return modeling.Scope{WorkspaceID: string(s)}
+	return modeling.Scope{WorkspaceID: s.WorkspaceID, UserID: s.UserID}
 }
 
 // toEngineView 把 modeling.Project 映射为 pipelineapi.EngineView。
@@ -65,15 +66,15 @@ func toModelingScope(s pipelineapi.Scope) modeling.Scope {
 func toEngineView(p modeling.Project) pipelineapi.EngineView {
 	return pipelineapi.EngineView{
 		ProjectID:        pipelineapi.ProjectID(p.ID),
-		Title:           p.Title,
-		Revision:        p.Revision,
-		Status:          projectStatusToEngine(p.Status),
+		Title:            p.Title,
+		Revision:         p.Revision,
+		Status:           projectStatusToEngine(p.Status),
 		CurrentOperation: stageToOperation(p.Current),
-		Artifacts:       refsToDescriptors(p),
-		EvidenceCount:   len(p.Evidence),
-		LastError:       p.LastError,
-		CreatedAt:       p.CreatedAt,
-		UpdatedAt:       p.UpdatedAt,
+		Artifacts:        refsToDescriptors(p),
+		EvidenceCount:    len(p.Evidence),
+		LastError:        p.LastError,
+		CreatedAt:        p.CreatedAt,
+		UpdatedAt:        p.UpdatedAt,
 	}
 }
 

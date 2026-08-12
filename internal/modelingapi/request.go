@@ -2,7 +2,7 @@ package modelingapi
 
 // request.go defines public identifiers and untrusted request DTOs.
 //
-// Design principles (v1-06, parts 6 and 7):
+// Design principles :
 //   - Opaque IDs use distinct string types and Parse functions without exposing store paths.
 //   - ProjectID currently accepts mp-<16hex>; this is API validation, not a storage promise.
 //   - OperationName validates [a-z][a-z0-9._-]{0,63} and is not a fixed enum.

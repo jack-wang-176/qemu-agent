@@ -29,9 +29,9 @@ func NewCompletionAdapter(completer modeling.Completer) *CompletionAdapter {
 //
 // pipelineapi.CompletionRequest 携带 Prompt + Schema；
 // 现有 modeling.Completer 只接受 (system, user)，因此 Adapter：
-//   1. 把 Schema 作为 user prompt 的追加指令（schema 引导）；
-//   2. 把 Prompt 作为 user prompt（current Pipeline 通常把 system 留空）；
-//   3. TokensUsed / FinishReason 在第一阶段无来源，留默认值。
+//  1. 把 Schema 作为 user prompt 的追加指令（schema 引导）；
+//  2. 把 Prompt 作为 user prompt（current Pipeline 通常把 system 留空）；
+//  3. TokensUsed / FinishReason 在第一阶段无来源，留默认值。
 func (a *CompletionAdapter) Complete(ctx context.Context, req pipelineapi.CompletionRequest) (pipelineapi.CompletionResult, error) {
 	user := req.Prompt
 	if req.Schema != "" {
@@ -44,8 +44,8 @@ func (a *CompletionAdapter) Complete(ctx context.Context, req pipelineapi.Comple
 		return pipelineapi.CompletionResult{}, fmt.Errorf("completion adapter: %w", err)
 	}
 	return pipelineapi.CompletionResult{
-		Content:     content,
-		TokensUsed:  0, // 现有 Completer 不返回 token 计数
+		Content:      content,
+		TokensUsed:   0, // 现有 Completer 不返回 token 计数
 		FinishReason: "stop",
 	}, nil
 }

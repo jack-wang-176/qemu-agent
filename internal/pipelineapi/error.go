@@ -1,32 +1,28 @@
 package pipelineapi
 
-// error.go — pipelineapi 包内错误类型。
+// error.go - Internal pipeline contract errors.
 //
-// 设计原则（v1-04 第六部分）：
-//   - pipelineapi 不依赖 modelingapi，因此有独立的错误类型。
-//   - Engine 内部错误用 EngineError 表达（见 event.go）。
-//   - Port 缺失、Port 操作失败等运行时错误用 ErrMissingPort/PortError 表达。
+// pipelineapi remains independent of modelingapi. modelingapp maps these errors
+// to stable, caller-safe public errors.
 
-// ErrMissingPort 表示 RuntimePorts 中某个 Port 未注入。
+// ErrMissingPort reports a required runtime port that was not injected.
 type ErrMissingPort PortName
 
-// Error 实现 error 接口。
+// Error implements error.
 func (e ErrMissingPort) Error() string {
 	return "pipelineapi: missing runtime port: " + string(e)
 }
 
-// PortError 表示某个 Port 操作失败。
+// PortError reports a runtime port failure while retaining its internal cause.
 //
-// Port 字段标识哪个 Port 出错；
-// Cause 是底层错误（可以是 nil）；
-// Message 是人类可读的错误描述。
+// Message is internal diagnostic text and must not be copied into a public error.
 type PortError struct {
 	Port    PortName
 	Cause   error
 	Message string
 }
 
-// Error 实现 error 接口，返回 Port + Message。
+// Error returns the port name and internal diagnostic message.
 func (e *PortError) Error() string {
 	if e == nil {
 		return ""
@@ -34,7 +30,7 @@ func (e *PortError) Error() string {
 	return "pipelineapi: port " + string(e.Port) + " error: " + e.Message
 }
 
-// Unwrap 支持 errors.Is/As 链。
+// Unwrap supports errors.Is and errors.As.
 func (e *PortError) Unwrap() error {
 	if e == nil {
 		return nil
@@ -42,7 +38,7 @@ func (e *PortError) Unwrap() error {
 	return e.Cause
 }
 
-// NewPortError 构造一个 PortError。
+// NewPortError constructs a PortError.
 func NewPortError(port PortName, message string, cause error) *PortError {
 	return &PortError{
 		Port:    port,

@@ -2,7 +2,7 @@ package modelingapi
 
 // service.go defines the stable product use-case contract.
 //
-// Design principles (v1-06, part 4):
+// Design principles :
 //   - Service is the stable product boundary for CLI, Agent tools, and MCP.
 //   - Callers can create, inspect, advance, read artifacts, apply, and read evidence.
 //   - Callers do not know how StageInput, stores, renderers, or the Pipeline work.
@@ -13,7 +13,7 @@ import "context"
 
 // Service is the stable product contract for modeling use cases.
 //
-// Command mapping (v1-06, part 4):
+// Command mapping :
 //
 //	/modeling new       → Create
 //	/modeling list      → List

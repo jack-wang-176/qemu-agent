@@ -2,7 +2,7 @@ package modelingapi
 
 // view.go defines stable caller-facing view DTOs.
 //
-// Design principles (v1-06, parts 3 and 8):
+// Design principles :
 //   - A view is a projection, not a store schema. It hides Stage enums, store paths,
 //     private metadata, and transient runtime fields.
 //   - ProjectView serves callers and is never persisted as project state.

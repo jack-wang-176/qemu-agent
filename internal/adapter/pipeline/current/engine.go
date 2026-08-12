@@ -67,14 +67,14 @@ func (e *Engine) Inspect(ctx context.Context, req pipelineapi.InspectRequest) (p
 
 // Execute 在给定 Project 上执行一次 operation。
 func (e *Engine) Execute(ctx context.Context, req pipelineapi.ExecuteRequest) (pipelineapi.ExecuteResult, error) {
-	if err := pipelineapi.ValidatePorts(req.Ports); err != nil {
+	if err := req.Validate(); err != nil {
 		return pipelineapi.ExecuteResult{}, err
 	}
 	stage, err := operationToStage(req.Operation)
 	if err != nil {
 		return pipelineapi.ExecuteResult{}, err
 	}
-	scope := toModelingScope(req.Ports.Repository.(scopeProvider).Scope())
+	scope := toModelingScope(req.Project.Scope)
 
 	runReq := modeling.RunRequest{
 		ProjectID: string(req.Project.ID),
@@ -82,7 +82,7 @@ func (e *Engine) Execute(ctx context.Context, req pipelineapi.ExecuteRequest) (p
 		Stage:     stage,
 		Request:   req.Instruction,
 		Sources:   sourcesToStrings(req.Sources),
-		Events:    newEventAdapter(req.Ports.Event),
+		Events:    newEventAdapter(req.Ports.Event, req.Project.ID, req.Operation),
 	}
 	runResult, err := e.pipe.Advance(ctx, runReq)
 	if err != nil {
@@ -90,13 +90,4 @@ func (e *Engine) Execute(ctx context.Context, req pipelineapi.ExecuteRequest) (p
 	}
 
 	return toExecuteResult(runResult), nil
-}
-
-// scopeProvider 是一个 internal 约定：Repository Adapter 通过此方法
-// 暴露其 Scope 给 Engine（Engine 需要 Scope 来调用现有 Pipeline）。
-//
-// 这是一处临时的桥接耦合——在 A5 modelingapp 接管 scope 注入后，
-// ExecuteRequest 会直接携带 Scope，此接口即可删除。
-type scopeProvider interface {
-	Scope() pipelineapi.Scope
 }

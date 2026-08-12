@@ -21,17 +21,18 @@ type eventAdapter struct {
 }
 
 // newEventAdapter 用 ExecuteRequest 的信息构造 eventAdapter。
-func newEventAdapter(publisher pipelineapi.EventPublisher) *eventAdapter {
-	return &eventAdapter{publisher: publisher}
+func newEventAdapter(publisher pipelineapi.EventPublisher, projectID pipelineapi.ProjectID, operation pipelineapi.OperationName) *eventAdapter {
+	return &eventAdapter{publisher: publisher, projectID: projectID, operation: operation}
 }
 
 // StageEvent 实现 modeling.EventEmitter。
 //
 // 把 modeling.StageEvent 转换为 pipelineapi.Event 并通过 publisher 发布。
 // 转换规则：
-//   stage_started   → operation_started
-//   stage_progress  → operation_progress
-//   stage_completed → operation_completed（OK=true → Result，false → Error）
+//
+//	stage_started   → operation_started
+//	stage_progress  → operation_progress
+//	stage_completed → operation_completed（OK=true → Result，false → Error）
 func (a *eventAdapter) StageEvent(ctx context.Context, ev modeling.StageEvent) error {
 	published := a.convert(ev)
 	if published == nil {

@@ -40,14 +40,12 @@ func NewRepositoryAdapter(
 	}
 }
 
-// Scope 实现 scopeProvider，让 current Engine 从 RuntimePorts.Repository 取 Scope。
-func (a *RepositoryAdapter) Scope() pipelineapi.Scope { return a.scope }
-
 // CreateProject 创建一个新项目记录。
 func (a *RepositoryAdapter) CreateProject(ctx context.Context, rec pipelineapi.ProjectRecord) (pipelineapi.ProjectRecord, error) {
 	p := modeling.Project{
 		Title:       rec.Title,
-		WorkspaceID: string(a.scope),
+		WorkspaceID: a.scope.WorkspaceID,
+		UserID:      a.scope.UserID,
 		Current:     modeling.StagePlan,
 		Status:      modeling.StatusPending,
 	}
@@ -70,7 +68,8 @@ func (a *RepositoryAdapter) GetProject(ctx context.Context, id pipelineapi.Proje
 // ListProjects 列出符合 scope 的项目记录。
 func (a *RepositoryAdapter) ListProjects(ctx context.Context, q pipelineapi.ProjectQuery) ([]pipelineapi.ProjectRecord, error) {
 	mq := modeling.Query{
-		WorkspaceID: string(q.Scope),
+		WorkspaceID: q.Scope.WorkspaceID,
+		UserID:      q.Scope.UserID,
 		Limit:       q.Limit,
 	}
 	projects, err := a.projects.List(ctx, mq)
@@ -200,7 +199,7 @@ func findArtifactRef(p modeling.Project, id string) (modeling.ArtifactRef, bool)
 func projectToRecord(p modeling.Project) pipelineapi.ProjectRecord {
 	return pipelineapi.ProjectRecord{
 		ID:        pipelineapi.ProjectID(p.ID),
-		Scope:     pipelineapi.Scope(p.WorkspaceID),
+		Scope:     pipelineapi.Scope{WorkspaceID: p.WorkspaceID, UserID: p.UserID},
 		Title:     p.Title,
 		Current:   pipelineapi.OperationName(string(p.Current)),
 		Status:    engineStatusFromModeling(p.Status),
@@ -215,7 +214,8 @@ func recordToProject(rec pipelineapi.ProjectRecord) modeling.Project {
 	return modeling.Project{
 		ID:          string(rec.ID),
 		Title:       rec.Title,
-		WorkspaceID: string(rec.Scope),
+		WorkspaceID: rec.Scope.WorkspaceID,
+		UserID:      rec.Scope.UserID,
 		Current:     modeling.Stage(string(rec.Current)),
 		Status:      modeling.Status(string(rec.Status)),
 		Revision:    rec.Revision,
@@ -242,5 +242,5 @@ func engineStatusFromModeling(s modeling.Status) pipelineapi.ProjectStatus {
 
 // toModelingScope 把 pipelineapi.Scope 转为 modeling.Scope。
 func toModelingScope(s pipelineapi.Scope) modeling.Scope {
-	return modeling.Scope{WorkspaceID: string(s)}
+	return modeling.Scope{WorkspaceID: s.WorkspaceID, UserID: s.UserID}
 }
