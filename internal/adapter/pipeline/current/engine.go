@@ -1,40 +1,47 @@
 package current
 
-// engine.go — current Engine Adapter (A3).
+// engine.go — current Engine Adapter.
 //
-// 把现有 modeling.Pipeline 包装为 pipelineapi.Engine。
-// 不改 Stage 实现；只做 operation↔Stage、request↔RunRequest、
-// Project/Artifact↔稳定 descriptor、StageEvent↔pipelineapi.Event 的映射。
+// It adapts the existing modeling pipeline to pipelineapi.Engine.
+// It does not change Stage implementations; it only maps operation to Stage,
+// requests to RunRequest, projects/artifacts to stable descriptors, and
+// StageEvent to pipelineapi.Event.
 //
-// 设计原则（v1-04 第十部分 A3）：
-//   - operation ↔ 当前 Stage（plan/extract/infer/emit/verify 五个 operation）；
-//   - pipelineapi request ↔ modeling.RunRequest；
-//   - 当前 Project/Artifact ↔ 稳定 descriptor；
-//   - 当前 StageEvent ↔ pipelineapi.Event。
-//   - 禁止改 Stage 实现；Gate：Adapter 调用产生的 Artifact 与直接调用
-//     当前 Pipeline 完全相同。
+// Design rules:
+//   - operation maps to one of the five current stages;
+//   - pipelineapi requests map to modeling.RunRequest;
+//   - current projects and artifacts map to stable descriptors;
+//   - current StageEvent values map to pipelineapi.Event;
+//   - Stage implementations remain unchanged, and adapted artifacts must be
+//     identical to artifacts from direct Pipeline execution.
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jack-wang-176/qemu-agent/internal/modeling"
 	"github.com/jack-wang-176/qemu-agent/internal/pipelineapi"
 )
 
-// Engine 把 modeling.Pipeline 适配为 pipelineapi.Engine。
+// Engine adapts the current modeling dependencies to pipelineapi.Engine.
 type Engine struct {
-	pipe *modeling.Pipeline
+	deps Dependencies
 }
 
-// NewEngine 用现有 Pipeline 构造 current Engine Adapter。
-func NewEngine(pipe *modeling.Pipeline) *Engine {
-	return &Engine{pipe: pipe}
+// NewEngine constructs a current Engine from its narrow modeling dependencies.
+func NewEngine(deps Dependencies) (*Engine, error) {
+	if deps.Engine == nil {
+		return nil, mapCurrentError(errors.New("current engine: engine dependency is nil"))
+	}
+	return &Engine{deps: deps}, mapCurrentError(nil)
 }
 
-// Describe 返回 current Pipeline 的能力描述。
+var _ pipelineapi.Engine = (*Engine)(nil)
+
+// Describe returns the capabilities exposed by the current Pipeline.
 func (e *Engine) Describe(ctx context.Context, req pipelineapi.DescribeRequest) (pipelineapi.Description, error) {
-	// 当前 Pipeline 暴露五个 operation（与 Stage 一一对应）。
+	// The current Pipeline exposes five operations, one for each Stage.
 	ops := []pipelineapi.OperationDescriptor{
 		{Name: "plan", DisplayName: "Plan", Description: "Read the request and skills, produce a modeling plan", RequiresSources: true, Mutating: true, MayBlock: false},
 		{Name: "extract", DisplayName: "Extract", Description: "Pull the register IR out of a datasheet/header", RequiresSources: true, Mutating: true, MayBlock: false},
@@ -52,42 +59,47 @@ func (e *Engine) Describe(ctx context.Context, req pipelineapi.DescribeRequest) 
 		SupportsEvidence: true,
 		SupportsCancel:   false,
 		SupportsProgress: true,
-	}, nil
+	}, mapCurrentError(nil)
 }
 
-// Inspect 读取一个已存在 Project 的当前快照，不执行 operation。
+// Inspect reads the current snapshot of an existing project without executing
+// an operation.
 func (e *Engine) Inspect(ctx context.Context, req pipelineapi.InspectRequest) (pipelineapi.EngineView, error) {
 	scope := toModelingScope(req.Scope)
-	project, err := e.pipe.Show(ctx, string(req.ProjectID), scope)
+	project, err := e.deps.Engine.Show(ctx, string(req.ProjectID), scope)
 	if err != nil {
-		return pipelineapi.EngineView{}, fmt.Errorf("current engine inspect: %w", err)
+		return pipelineapi.EngineView{}, mapCurrentError(errors.Join(fmt.Errorf("current engine inspect: %w", err)))
 	}
-	return toEngineView(project), nil
+	return toEngineView(project), mapCurrentError(nil)
 }
 
-// Execute 在给定 Project 上执行一次 operation。
+// Execute runs one operation for the supplied project snapshot.
 func (e *Engine) Execute(ctx context.Context, req pipelineapi.ExecuteRequest) (pipelineapi.ExecuteResult, error) {
 	if err := req.Validate(); err != nil {
-		return pipelineapi.ExecuteResult{}, err
+		return pipelineapi.ExecuteResult{}, mapCurrentError(err)
 	}
 	stage, err := operationToStage(req.Operation)
 	if err != nil {
-		return pipelineapi.ExecuteResult{}, err
+		return pipelineapi.ExecuteResult{}, mapCurrentError(err)
 	}
 	scope := toModelingScope(req.Project.Scope)
 
+	sources, err := sourcesToStrings(req.Sources)
+	if err != nil {
+		return pipelineapi.ExecuteResult{}, mapCurrentError(err)
+	}
 	runReq := modeling.RunRequest{
 		ProjectID: string(req.Project.ID),
 		Scope:     scope,
 		Stage:     stage,
 		Request:   req.Instruction,
-		Sources:   sourcesToStrings(req.Sources),
+		Sources:   sources,
 		Events:    newEventAdapter(req.Ports.Event, req.Project.ID, req.Operation),
 	}
-	runResult, err := e.pipe.Advance(ctx, runReq)
+	runResult, err := e.deps.Engine.Advance(ctx, runReq)
 	if err != nil {
-		return pipelineapi.ExecuteResult{}, fmt.Errorf("current engine execute: %w", err)
+		return pipelineapi.ExecuteResult{}, mapCurrentError(errors.Join(fmt.Errorf("current engine execute: %w", err)))
 	}
 
-	return toExecuteResult(runResult), nil
+	return toExecuteResult(runResult), mapCurrentError(nil)
 }

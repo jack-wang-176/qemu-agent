@@ -1,10 +1,10 @@
 package current
 
-// event.go — StageEvent → pipelineapi.Event adapter (A3).
+// event.go — StageEvent → pipelineapi.Event adapter .
 //
-// 现有 modeling.Pipeline 通过 EventEmitter 发布 StageEvent。
-// current Engine Adapter 把 pipelineapi.EventPublisher 包装为
-// modeling.EventEmitter，并把 StageEvent 转换为 pipelineapi.Event。
+// The current modeling.Pipeline publishes StageEvent through EventEmitter.
+// The current Engine Adapter wraps pipelineapi.EventPublisher as a
+// modeling.EventEmitter and converts StageEvent to pipelineapi.Event.
 
 import (
 	"context"
@@ -13,26 +13,26 @@ import (
 	"github.com/jack-wang-176/qemu-agent/internal/pipelineapi"
 )
 
-// eventAdapter 把 pipelineapi.EventPublisher 适配为 modeling.EventEmitter。
+// eventAdapter adapts pipelineapi.EventPublisher to modeling.EventEmitter.
 type eventAdapter struct {
 	publisher pipelineapi.EventPublisher
 	projectID pipelineapi.ProjectID
 	operation pipelineapi.OperationName
 }
 
-// newEventAdapter 用 ExecuteRequest 的信息构造 eventAdapter。
+// newEventAdapter constructs an eventAdapter from ExecuteRequest identity.
 func newEventAdapter(publisher pipelineapi.EventPublisher, projectID pipelineapi.ProjectID, operation pipelineapi.OperationName) *eventAdapter {
 	return &eventAdapter{publisher: publisher, projectID: projectID, operation: operation}
 }
 
-// StageEvent 实现 modeling.EventEmitter。
+// StageEvent implements modeling.EventEmitter.
 //
-// 把 modeling.StageEvent 转换为 pipelineapi.Event 并通过 publisher 发布。
-// 转换规则：
+// It converts modeling.StageEvent to pipelineapi.Event and publishes it.
+// Mapping rules:
 //
 //	stage_started   → operation_started
 //	stage_progress  → operation_progress
-//	stage_completed → operation_completed（OK=true → Result，false → Error）
+//	stage_completed -> operation_completed (OK=true -> Result, false -> Error)
 func (a *eventAdapter) StageEvent(ctx context.Context, ev modeling.StageEvent) error {
 	published := a.convert(ev)
 	if published == nil {
@@ -42,7 +42,7 @@ func (a *eventAdapter) StageEvent(ctx context.Context, ev modeling.StageEvent) e
 }
 
 func (a *eventAdapter) convert(ev modeling.StageEvent) *pipelineapi.Event {
-	// 在第一个事件到来时锁定 project/operation（Engine 调用时已知）。
+	// Project and operation identity are fixed when the adapter is constructed.
 	pid := a.projectID
 	op := a.operation
 
