@@ -2,9 +2,12 @@ package app
 
 import (
 	"io"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/jack-wang-176/qemu-agent/internal/config"
+	"github.com/jack-wang-176/qemu-agent/internal/modelingagent"
 )
 
 func TestValidateBuildInputRejectsMissingAdapters(t *testing.T) {
@@ -31,17 +34,23 @@ func (*emptyReader) Read([]byte) (int, error) { return 0, io.EOF }
 
 func validBuildConfig(t *testing.T) config.Config {
 	t.Helper()
+	dataDir := t.TempDir()
 	return config.Config{
 		Agent:     config.AgentConfig{Provider: "ollama", Model: "model", MaxTurns: 1},
 		Models:    config.ModelConfig{Definitions: []config.ModelDefinitionConfig{{Provider: "ollama", Name: "model", MaxContext: 4096, Tools: true}}},
 		Context:   config.ContextConfig{MaxTokens: 1024},
-		Paths:     config.PathConfig{DataDir: t.TempDir(), SessionDir: t.TempDir(), Workspace: t.TempDir()},
+		Paths:     config.PathConfig{DataDir: dataDir, SessionDir: t.TempDir(), Workspace: t.TempDir()},
 		Tools:     config.ToolConfig{Timeout: 1, MaxOutputBytes: 1, ReadMaxLines: 1},
 		Log:       config.LogConfig{Level: "info", Format: "text"},
 		Providers: config.ProviderConfig{Ollama: config.APIConfig{BaseURL: config.DefaultOllamaBaseURL}},
 		Channel:   config.ChannelConfig{CLIEnabled: true, CLISessionKey: config.DefaultCLISessionKey, CLIPrompt: config.DefaultCLIPrompt, MaxInputBytes: config.DefaultMaxInputBytes},
 		Security:  config.SecurityConfig{Mode: config.DefaultSecurityMode, AuditPath: t.TempDir() + "/tools.jsonl", ApprovalTimeout: config.DefaultApprovalTimeout, MaxAuditArgBytes: config.DefaultMaxAuditArgBytes, MaxAuditOutBytes: config.DefaultMaxAuditOutBytes},
 		Prompt:    config.PromptConfig{ReservedContextTokens: config.DefaultPromptReservedTokens, MaxInjectedBytes: config.DefaultPromptMaxBytes, MaxMemoryItems: config.DefaultPromptMaxMemoryItems},
+		Modeling: config.ModelingConfig{
+			Enabled: true, Dir: filepath.Join(dataDir, "modeling"),
+			MaxProjects: config.DefaultModelingMaxProjects, MaxArtifactBytes: config.DefaultModelingArtifactBytes,
+			MaxProjectBytes: config.DefaultModelingProjectBytes, StageTimeout: time.Minute,
+		},
 	}
 }
 
@@ -53,8 +62,16 @@ func TestBuildCreatesCLIChannel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := runtime.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
 	if len(runtime.Channels) != 1 || runtime.Channels[0].Name() != "cli" {
 		t.Fatalf("channels = %#v", runtime.Channels)
+	}
+	if _, ok := runtime.Application.runner.(*modelingagent.Runner); !ok {
+		t.Fatalf("production runner = %T, want *modelingagent.Runner", runtime.Application.runner)
 	}
 }
 
@@ -88,6 +105,11 @@ func TestBuildCreatesTelegramOnlyAndBothChannels(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			t.Cleanup(func() {
+				if err := runtime.Close(); err != nil {
+					t.Errorf("Close() error = %v", err)
+				}
+			})
 			if len(runtime.Channels) != test.want {
 				t.Fatalf("channels=%d", len(runtime.Channels))
 			}

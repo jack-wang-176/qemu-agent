@@ -3,24 +3,26 @@
 一个面向 QEMU 与嵌入式系统的外设建模工具链：从硬件参考资料中提取寄存器语义，
 生成可审查的 Reg-IR 与 C 代码，并通过审批、构建和测试逐步落地到 QEMU 源码树。
 
-项目当前以**外设建模**为核心，交互式命令行只是入口；生成、审查、应用和验证彼此隔离，
+项目当前以**外设建模**为唯一主线路，交互式命令行只是入口；生成、审查、应用和验证彼此隔离，
 便于追踪每一步的输入、产物与证据。
 
-当前版本：**preview 2.0**（外设建模流水线已落地，默认关闭）。
+当前版本：**v1 preview**（专业建模 Agent 主线路已落地，必须显式启用）。
 
 ## 能力概览
 
 ```text
-参考资料 → plan → extract → infer → emit → 人工审批 apply → verify
-              │        │        │        │                  │
-              │        │        │        └─ Reg-IR → C 产物  └─ ninja/qtest 证据
+参考资料 → plan → extract → infer → emit → [v1: awaiting_apply]
+              │        │        │        │
+              │        │        │        └─ Reg-IR → C 产物与可审查 diff
               │        │        └─ 补充访问属性、依赖与中断语义
               │        └─ 形成结构化寄存器中间表示
               └─ 明确外设范围、资料和验收目标
+
+后续版本：awaiting_apply → 人工审批 apply → verify → ninja/qtest Evidence
 ```
 
-核心设计：以硬件资料为事实源，以 Reg-IR 为中间表示；生成结果先进入产物库，
-只有经过人工确认才允许修改 QEMU 源码树。
+核心设计：以硬件资料为事实源，以 Reg-IR 为中间表示；生成结果只进入产物库。
+v1 不提供修改 QEMU 源码树的生产入口。
 
 ---
 
@@ -41,6 +43,7 @@
 ```bash
 cd qemu-agent
 export OPENROUTER_API_KEY=sk-or-v1-...     # 必填，否则启动即报 "OPENROUTER_API_KEY is required"
+export QEMU_AGENT_MODELING_ENABLED=true    # v1 专业建模主线路必填
 go run ./cmd/qemu-agent
 ```
 
@@ -67,6 +70,7 @@ ollama pull qwen2.5-coder:7b
 
 export QEMU_AGENT_PROVIDER=ollama
 export QEMU_AGENT_MODEL=qwen2.5-coder:7b
+export QEMU_AGENT_MODELING_ENABLED=true
 go run ./cmd/qemu-agent
 ```
 
@@ -115,101 +119,52 @@ export QEMU_AGENT_TOOL_APPROVAL_TIMEOUT=5m    # 默认 5 分钟，超时视为�
 
 ---
 
-# 运行 Modeling 流水线
+# 运行专业建模工作流
 
-这是本项目的核心能力，**默认关闭**。
+v1 不再把建模作为偶尔调用的命令或工具。CLI 与 Telegram 收到的普通文本统一进入：
 
-## 为什么默认关
+```text
+channel -> Application -> modelingagent.Runner -> modelingworkflow.Controller
+        -> modelingapi.Service -> pipelineapi.Engine -> five-stage implementation
+```
 
-它比其它能力多一个危险维度：要写 **QEMU 源码树**，那不是 agent 私有的沙箱。
-所以启用需要你显式给出落地目标，并且落地这一步永远需要人工逐个批准。
-
-## 1. 启用
+启动必须显式设置：
 
 ```bash
 export OPENROUTER_API_KEY=sk-or-v1-...
 export QEMU_AGENT_MODELING_ENABLED=true
-export QEMU_AGENT_MODELING_QEMU_ROOT=/path/to/qemu          # 你的 QEMU 源码树
-export QEMU_AGENT_MODELING_BUILD_DIR=/path/to/qemu/build    # verify 用，需已 configure 过
-export QEMU_AGENT_WORKSPACE=/path/to/datasheets             # datasheet 放这儿，agent 才读得到
+export QEMU_AGENT_MODELING_AUTO_APPLY=false
+export QEMU_AGENT_WORKSPACE=/path/to/modeling-workspace
 go run ./cmd/qemu-agent
 ```
 
-两个路径都可以留空，对应不同的能力档位：
-
-| 配置 | 能做什么 |
-|---|---|
-| 全不给 | `/modeling` 回答 `modeling is disabled` |
-| 只给 `ENABLED` | 能规划、抽 Reg-IR、生成代码、出 diff；`apply` 回答 `modeling apply is not available in this configuration` |
-| 加 `QEMU_ROOT` | 能 `apply` 落地 |
-| 再加 `BUILD_DIR` | 能 `verify` 跑 ninja + qtest |
-
-只给 `ENABLED` 是个真实可用的档位：在一台没有 QEMU checkout 的机器上读数据手册、产出
-Reg-IR 和 C 代码，最后把 diff 拷走。流水线读数据手册用的是 **workspace** 根，`apply`
-写文件用的是 **QEMU 树**根——两套工具根，所以少配一个不会让另一个失效。
-
-`BUILD_DIR` 必须是**你自己已经 configure 好**的构建目录。配置 QEMU 需要只有你知道的参数
-（target 列表、交叉编译器），流水线不会替你跑 `configure`，否则会构建出没人要的东西：
-
-```bash
-cd /path/to/qemu && mkdir -p build && cd build
-../configure --target-list=riscv64-softmmu --enable-debug
-```
-
-## 2. 五个阶段
+然后直接用自然语言工作，例如：
 
 ```text
-plan     读需求与 skill，产出建模计划
-extract  从 datasheet / 头文件抽出 Reg-IR（寄存器映射的结构化表示）
-infer    补齐行为语义：复位值、副作用、中断
-emit     生成 C 代码到暂存区，产出 diff 与 apply manifest —— 此时 QEMU 树零变化
-verify   在 build 目录跑 ninja 与 qtest，产出 Evidence
+请创建一个 K230 RMU 的 QEMU 外设建模项目，目标是 sysbus 设备。
+资料位于 datasheets/k230-rmu.txt。
+继续当前项目。
+展示当前状态。
+读取生成的 diff。
 ```
 
-## 3. 完整走一遍
+解释层会把对话约束为 `start`、`continue`、`inspect`、`provide_input`、
+`read_artifact`、`evidence` 或 `start_new` 意图；用户不能通过对话绕过项目状态机。
+同一个 channel 会话绑定一个当前项目，绑定、会话、项目和产物分别持久化。
 
-```text
-/modeling new k230 rmu
-  → created modeling project mp-a1b2c3d4e5f6a7b8 at stage plan (pending)
+五阶段实现仍为 `plan -> extract -> infer -> emit -> verify`，但 v1 生产主线路只自动推进到
+`emit` 完成后的 `awaiting_apply` 边界。此时 QEMU 树没有变化，回复只展示可审查的 diff
+产物；生产组合根不构造 Apply executor，也不提供 Apply 命令，因此 `verify` 在 v1 主线路
+不可达。Apply 与后续 Verify 将在具备独立人工审核协议的版本中接入。
 
-/modeling advance mp-a1b2... --source=/path/to/datasheets/k230-rmu.txt 把 RMU 建成 sysbus 设备
-/modeling advance mp-a1b2...          # extract：抽 Reg-IR
-/modeling advance mp-a1b2...          # infer：补行为语义
-/modeling advance mp-a1b2...          # emit：生成代码；QEMU 树此刻仍零变化
+必须遵守三条安全边界：
 
-/modeling show mp-a1b2...             # 看状态与产物清单
-/modeling diff mp-a1b2...             # 读 diff ← 人工审阅这一步是全部安全性的基础
-/modeling apply mp-a1b2...            # 落地，逐个文件弹审批
-/modeling advance mp-a1b2...          # verify：ninja + qtest
-/modeling evidence mp-a1b2...         # 看构建与测试证据
-```
+1. `emit` 只写内容寻址产物库，不写 QEMU 源码树。
+2. 建模产物不会自动回灌系统提示词；需要读取时按显式 Artifact 引用取回。
+3. datasheet 内容、模型原文和工具输出不会作为内部错误细节直接返回或写入普通日志。
 
-要点：
-
-- `--source=` 只在 extract 需要，指向 datasheet 的**文本**文件（PDF 请先转成文本），
-  且必须在 workspace 之内。
-- `emit` 跑完项目停在 `blocked / awaiting_apply`——这不是错误，是在等你审 diff。
-  此时再 `advance` 会重跑 emit，而不是往下走；`verify` 只有 `apply` 之后才可达。
-- 中途出错不用重开项目：
-
-  ```text
-  /modeling reset mp-a1b2... extract --confirm=mp-a1b2...
-  ```
-
-  回到某个阶段重跑，该阶段之后的产物会被清掉。确认词就是项目 id 本身。
-- 进程被杀掉再启动，`/modeling show` 会告诉你上次死在哪个阶段。
-
-## 4. 三条安全规则
-
-1. **emit 不落地。** 生成的代码进内容寻址的产物库，不进 QEMU 源码树。要落地必须显式
-   `/modeling apply`，它需要交互式渠道（有人能看 diff 并逐个批准），每次写入都经过
-   `security.Executor`，和任何一次普通 `write` 受同样的策略与审计约束。
-2. **建模产物永不自动进系统提示词。** 阶段结论是模型自己写的内容，回灌等于让它把自己的
-   猜测当成事实。
-3. **错误只报类别，不回显内容。** datasheet 片段、模型原文、工具 stdout 一律不进日志、
-   不进项目记录、不进渠道回复。
-
-项目状态与产物以 `0700` / `0600` 落盘：项目标题和产物名描述的是未发布硬件。
+`QEMU_AGENT_MODELING_ENABLED` 默认仍为 `false`，用于要求部署者显式接受专业建模产品配置；
+Step 12 的生产构建在它为 `false` 时会拒绝启动，而不会退回旧的通用 Agent。
 
 ---
 
@@ -219,29 +174,29 @@ verify   在 build 目录跑 ninja 与 qtest，产出 Evidence
 /help                                          列出命令
 /new /reset /sessions /resume <id> /history    会话管理
 /compact                                       手工压缩上下文
-/model [list|<alias|provider:model>]           查看 / 切换模型
 /skills [list|show <name>]                     查看 skill
 /remember [--kind=<kind>] [--scope=<scope>] <text>
 /memory list|search <text>|show <id>|forget <id>|pending|approve <id>|reject <id>
-/modeling new <title>|list|show <id>|advance <id> [--stage=<stage>] [--source=<path>] [request]
-         |diff <id>|apply <id>|evidence <id>|reset <id> <stage> --confirm=<id>
 /exit
 ```
+
+`/model` 与 `/modeling` 已移除。建模模型在启动时固定解析，建模操作通过普通文本进入强约束
+workflow；未知旧命令返回可恢复的 `unknown command`，不会触发隐藏的第二控制面。
 
 # 当前能力
 
 | 能力 | 说明 | 默认 |
 |---|---|---|
-| Agent loop | OpenAI 兼容协议（默认 OpenRouter），tool calling | 开 |
+| 专业建模主循环 | 普通文本解释为受限意图并进入固定建模 workflow | 需显式启用 |
 | 会话管理 | 多会话注册表、持久化、`/resume`、自动压缩上下文 | 开 |
 | 安全工具执行 | 所有副作用经 `security.Executor`：策略判定 → 人工审批 → JSONL 审计 | 开 |
 | 内置工具 | `read` / `write` / `bash`，均限制在 workspace 内 | 开 |
-| 模型注册表 | 多 provider / 多模型，运行期 `/model` 切换 | 开 |
+| 模型注册表 | 多 provider / 多模型；建模模型在启动时固定解析 | 开 |
 | 请求级事件流 | `run_started` / `turn_started` / `tool_*` / `stage_*` / `run_completed`，CLI 与 Telegram 各自渲染 | 开 |
 | Telegram 渠道 | 白名单用户、并发限制、消息分片 | 关 |
 | Skills | 操作员放置的 SKILL.md，索引进系统提示词，模型用 `use_skill` 取正文 | 开 |
 | Memory | `/remember` 手工记忆 + 可选自动抽取候选、人工审批后入库 | 开 |
-| **Modeling 流水线** | **五阶段外设建模，产物内容寻址、落地需人工审批** | **关** |
+| **Modeling 流水线** | **v1 推进至 `awaiting_apply`，产物内容寻址，QEMU 树零写入** | **必需** |
 
 流式输出（`QEMU_AGENT_STREAM`）尚未支持，置 `true` 会启动失败。
 
@@ -285,16 +240,16 @@ verify   在 build 目录跑 ninja 与 qtest，产出 Evidence
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `QEMU_AGENT_MODELING_ENABLED` | `false` | 总开关 |
-| `QEMU_AGENT_MODELING_QEMU_ROOT` | 空 | QEMU 源码树；空 = `apply` 不可用 |
-| `QEMU_AGENT_MODELING_BUILD_DIR` | 空 | 已 configure 的构建目录；空 = `verify` 不可用 |
+| `QEMU_AGENT_MODELING_ENABLED` | `false` | v1 启动必须显式设为 `true` |
+| `QEMU_AGENT_MODELING_QEMU_ROOT` | 空 | v1 主线路不使用，预留给后续受审 Apply 接入 |
+| `QEMU_AGENT_MODELING_BUILD_DIR` | 空 | v1 主线路不使用，Verify 在 Apply 后才可达 |
 | `QEMU_AGENT_MODELING_DIR` | `<DataDir>/modeling` | 项目状态与产物 |
 | `QEMU_AGENT_MODELING_MODEL` | 空 | 阶段用的模型；空 = 复用会话默认 |
 | `QEMU_AGENT_MODELING_STAGE_TIMEOUT` | `10m` | 单阶段墙钟上限 |
 | `QEMU_AGENT_MODELING_MAX_PROJECTS` | `1000` | 单 workspace 项目数上限 |
 | `QEMU_AGENT_MODELING_MAX_ARTIFACT_BYTES` | `1 MiB` | 单产物上限 |
 | `QEMU_AGENT_MODELING_MAX_PROJECT_BYTES` | `8 MiB` | 单项目产物总和上限 |
-| `QEMU_AGENT_MODELING_AUTO_APPLY` | `false` | 置 true 需同时给 QEMU_ROOT；**不建议** |
+| `QEMU_AGENT_MODELING_AUTO_APPLY` | `false` | v1 必须保持 `false`，否则拒绝启动 |
 
 ## Skills / Memory / Telegram
 
@@ -308,12 +263,10 @@ verify   在 build 目录跑 ninja 与 qtest，产出 Evidence
 |---|---|
 | `OPENROUTER_API_KEY is required` | 没设 key；或想用本地模型则设 `QEMU_AGENT_PROVIDER=ollama` |
 | `QEMU_AGENT_STREAM=true is not supported yet` | 流式尚未支持，去掉该变量 |
-| `modeling is disabled` | 设 `QEMU_AGENT_MODELING_ENABLED=true` 并重启 |
-| `apply is unavailable: this build has no QEMU source tree configured` | 没设 `QEMU_AGENT_MODELING_QEMU_ROOT` |
-| `modeling apply is not available in this configuration` | 同上，来自更底层：applier 本身是禁用实现 |
-| `apply needs an interactive channel` | 在交互式终端里跑，不要用管道或 `-p`（这条会先于上面两条触发） |
-| `extract needs at least one --source=<path> to read` | extract 阶段要 `--source=` 指向 datasheet 文本 |
-| extract 说读不到 `--source` 的文件 | datasheet 要放在 `QEMU_AGENT_WORKSPACE` 里，不是 QEMU 树里 |
+| `professional modeling v1 requires QEMU_AGENT_MODELING_ENABLED=true` | 显式设置该变量并重启；不会降级到旧 Agent |
+| `professional modeling v1 requires QEMU_AGENT_MODELING_AUTO_APPLY=false` | 删除该变量或设为 `false` |
+| workflow 询问 source | 用自然语言提供 workspace 内的资料相对路径 |
+| extract 说读不到 source | datasheet 必须位于 `QEMU_AGENT_WORKSPACE` 内 |
 | 工具报路径不可达 | 目标不在 `QEMU_AGENT_WORKSPACE` 内；把 workspace 指对 |
 | `apply_rejected` | 常见于项目还没到 emit 阶段就 apply，或目标文件已存在 |
 
@@ -323,9 +276,11 @@ verify   在 build 目录跑 ninja 与 qtest，产出 Evidence
 cmd/qemu-agent/          入口：flag 解析 → config → app.Build → Runtime.Run
 internal/
   app/                   组合根。Build 是唯一选择具体实现的地方
-    build/               各能力的装配：tool manager、knowledge、modeling
+    build/               Pipeline、Service、Workflow 与专业 Runner 的分层装配
     commands*.go         斜杠命令族
-  agent/                 Agent loop：模型调用、tool call 分派、事件发射
+  modelingagent/         会话投影、意图解释、事件桥与专业 workflow Runner
+  modelingworkflow/      对话意图、会话项目绑定与强约束工作流控制器
+  agent/                 共享 RunInput 等基础类型；生产组合根不构造通用 Agent
   session/               会话注册表与持久化
   channel/               cli/ 与 telegram/ 两个渠道
   runstream/             请求级事件协议
@@ -349,6 +304,5 @@ go test ./...             # 全绿
 go build ./...            # 成功
 ```
 
-跨层集成测试见 `internal/app/modeling_integration_test.go`：用 stub 模型与
-recording executor 跑 `new → advance×4 → diff → apply → verify`，断言 apply 之前
-QEMU 树零变化、每阶段留下产物、进程重启后状态一致、executor 收到的调用集合没有旁路。
+跨层 Pipeline 集成测试见 `internal/app/modeling_integration_test.go`；Step 12 的生产接线 Gate
+位于 `internal/app/build_test.go`，并断言 `Application` 实际持有 `modelingagent.Runner`。

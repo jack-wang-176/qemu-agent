@@ -40,9 +40,8 @@ type ModelingWorkflowComponents struct {
 	Runner   *modelingagent.Runner
 }
 
-// BuildModelingWorkflow closes the professional modeling object graph without
-// installing it into Application. The production entry-point switch remains a
-// separate composition-root change.
+// BuildModelingWorkflow closes the professional modeling object graph. The
+// process composition root installs Runner as Application's only text runner.
 func BuildModelingWorkflow(in ModelingWorkflowInput) (ModelingWorkflowComponents, error) {
 	if err := in.Config.ValidateProfessionalModelingV1(); err != nil {
 		return ModelingWorkflowComponents{}, fmt.Errorf("build modeling workflow config: %w", err)

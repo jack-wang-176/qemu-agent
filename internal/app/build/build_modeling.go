@@ -8,10 +8,12 @@
 // command and no stage contains "is modeling on?" — that question is answered
 // exactly once, here, at startup.
 //
-// There are three capability levels rather than two, and they are independent:
+// This compatibility builder supports three capability levels. The production
+// composition root requires modeling to be enabled and does not pass an apply
+// executor, but lower-level tests and future maintenance entry points still use
+// the complete result:
 //
-//   - modeling disabled — everything is the Disabled* pair; /modeling answers
-//     "modeling is disabled" instead of the command family being absent.
+//   - modeling disabled — everything is the Disabled* pair.
 //   - enabled without QemuRoot — the pipeline runs, plans, extracts and infers,
 //     but Emit's landing and Verify's build have no target, so Applier stays
 //     DisabledApplier. This is the useful configuration for reading a datasheet
@@ -74,11 +76,10 @@ type ToolExecutor interface {
 
 // ModelingComponents is the whole modeling layer as one value.
 //
-// The Application only ever receives Runner and Applier — the two narrow
-// interfaces. Projects and Artifacts are returned for the integration tests and
-// for a future maintenance command; no request-path code may take them, because
-// a command that could call ProjectStore.Save would be able to change project
-// state without going through a stage.
+// The production Application receives neither legacy Runner nor Applier. They
+// remain here for compatibility tests; the production path consumes Runtime via
+// modelingapp.Service and modelingworkflow.Controller. Projects and Artifacts
+// are exposed only for integration tests and future maintenance entry points.
 type ModelingComponents struct {
 	Projects  modeling.ProjectStore
 	Artifacts modeling.ArtifactStore
@@ -213,10 +214,9 @@ func BuildModeling(in ModelingInput) (ModelingComponents, error) {
 	components.Runner = runner
 
 	// 6: the applier, and only if there is somewhere to apply to *and* an executor
-	// rooted there. Either one missing leaves DisabledApplier in place, so
-	// `/modeling apply` reports that this build has no apply target instead of
-	// failing halfway through a write — or worse, writing hw/... into the workspace
-	// because it borrowed the pipeline's executor.
+	// rooted there. Either one missing leaves DisabledApplier in place rather than
+	// failing halfway through a write or writing hw/... into the workspace because
+	// it borrowed the pipeline's executor.
 	if strings.TrimSpace(cfg.QemuRoot) == "" || in.ApplyExecutor == nil {
 		return components, nil
 	}

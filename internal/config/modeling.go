@@ -178,10 +178,9 @@ func (c Config) validateModeling() error {
 	return nil
 }
 
-// ValidateProfessionalModelingV1 validates the stricter product contract used
-// by the professional modeling workflow. The legacy command path may remain
-// disabled or use AutoApply, so this check is intentionally separate from
-// Config.Validate until the composition root is switched in Step 12.
+// ValidateProfessionalModelingV1 validates the product contract enforced by the
+// professional workflow composition root. It remains separate from Validate so
+// lower-level packages can test disabled and apply-capable configurations.
 func (c Config) ValidateProfessionalModelingV1() error {
 	if err := c.validateModeling(); err != nil {
 		return err

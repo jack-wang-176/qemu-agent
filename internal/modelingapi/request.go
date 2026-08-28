@@ -77,23 +77,23 @@ type SourceRef struct {
 	Digest string
 }
 
-// CreateRequest is the stable DTO for /modeling new.
+// CreateRequest is the stable DTO for project creation.
 type CreateRequest struct {
 	Title string
 }
 
-// ListRequest is the stable DTO for /modeling list.
+// ListRequest is the stable DTO for bounded project listing.
 type ListRequest struct {
 	Limit  int    // <=0 requests the adapter default.
 	Cursor string // The current store has no cursor; its adapter returns an empty NextCursor.
 }
 
-// ShowRequest is the stable DTO for /modeling show.
+// ShowRequest is the stable DTO for project inspection.
 type ShowRequest struct {
 	ProjectID ProjectID
 }
 
-// AdvanceRequest is the stable DTO for /modeling advance.
+// AdvanceRequest is the stable DTO for one pipeline operation.
 type AdvanceRequest struct {
 	ProjectID        ProjectID
 	Operation        OperationName // Empty selects the current or recommended operation.
@@ -102,7 +102,7 @@ type AdvanceRequest struct {
 	ExpectedRevision int
 }
 
-// ResetRequest is the stable DTO for /modeling reset.
+// ResetRequest is the stable DTO for an explicit project reset.
 type ResetRequest struct {
 	ProjectID        ProjectID
 	Operation        OperationName
@@ -118,13 +118,13 @@ type ReadArtifactRequest struct {
 	Limit      int // <=0 requests the adapter default.
 }
 
-// PlanApplyRequest is the preview phase of /modeling apply.
+// PlanApplyRequest requests an immutable apply preview.
 type PlanApplyRequest struct {
 	ProjectID        ProjectID
 	ExpectedRevision int
 }
 
-// ApplyRequest is the confirmed execution phase of /modeling apply.
+// ApplyRequest is the confirmed execution phase of apply.
 type ApplyRequest struct {
 	ProjectID        ProjectID
 	ExpectedRevision int
@@ -132,7 +132,7 @@ type ApplyRequest struct {
 	ApprovalToken    string
 }
 
-// EvidenceRequest is the stable DTO for /modeling evidence.
+// EvidenceRequest is the stable DTO for bounded evidence listing.
 type EvidenceRequest struct {
 	ProjectID ProjectID
 	Limit     int

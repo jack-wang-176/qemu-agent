@@ -13,20 +13,17 @@ import "context"
 
 // Service is the stable product contract for modeling use cases.
 //
-// Command mapping :
+// Workflow and future adapter mapping:
 //
-//	/modeling new       → Create
-//	/modeling list      → List
-//	/modeling show      → Show
-//	/modeling advance   → Advance
-//	/modeling diff      → Show (find the diff descriptor) + ReadArtifact
-//	/modeling apply     preview phase   → PlanApply
-//	/modeling apply     confirmed phase → Apply
-//	/modeling evidence  → Evidence, then ReadArtifact when content is requested
-//	/modeling reset     → Reset
+//	start         -> Create
+//	inspect       -> Show
+//	continue      -> Advance
+//	read_artifact -> Show plus ReadArtifact
+//	evidence      -> Evidence, then ReadArtifact when content is requested
 //
-// Diff does not need a separate business method because it is an artifact; entry
-// adapters can compose Show and ReadArtifact.
+// List, Reset, PlanApply, and Apply remain stable use cases for future trusted
+// adapters. They are not exposed by the v1 production conversation workflow.
+// Diff does not need a separate method because it is an artifact.
 type Service interface {
 	Capabilities(ctx context.Context, call CallContext) (Capabilities, error)
 	Create(ctx context.Context, call CallContext, req CreateRequest) (ProjectView, error)

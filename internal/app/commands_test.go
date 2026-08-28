@@ -77,8 +77,6 @@ func TestNewCommandRouterRejectsNilDependencies(t *testing.T) {
 		func(d *CommandDependencies) { d.Skills = nil },
 		func(d *CommandDependencies) { d.Memories = nil },
 		func(d *CommandDependencies) { d.Candidates = nil },
-		func(d *CommandDependencies) { d.Modeling = nil },
-		func(d *CommandDependencies) { d.Apply = nil },
 	} {
 		deps := full
 		mutate(&deps)
@@ -203,37 +201,12 @@ func TestCommandRouterCompactFailurePreservesSession(t *testing.T) {
 	}
 }
 
-func TestCommandRouterModelCurrentListAndSelect(t *testing.T) {
-	router, registry := newTestRouter(t, nil)
-	ctx := context.Background()
-	if _, err := registry.New(ctx, "cli:default"); err != nil {
-		t.Fatal(err)
-	}
-	current, err := router.Execute(ctx, testCommandContext("cli:default"), parseForTest(t, "/model"))
-	if err != nil || !strings.Contains(current.Text, "ollama:test-model") {
-		t.Fatalf("current = %#v, %v", current, err)
-	}
-	list, err := router.Execute(ctx, testCommandContext("cli:default"), parseForTest(t, "/model list"))
-	if err != nil || !strings.Contains(list.Text, "test-model") {
-		t.Fatalf("list = %#v, %v", list, err)
-	}
-	selected, err := router.Execute(ctx, testCommandContext("cli:default"), parseForTest(t, "/model model"))
-	if err != nil || !strings.Contains(selected.Text, "ollama:model") {
-		t.Fatalf("selected = %#v, %v", selected, err)
-	}
-	after, _ := registry.Current(ctx, "cli:default")
-	if after.ModelRef.String() != "ollama:model" {
-		t.Fatalf("ModelRef = %s", after.ModelRef.String())
-	}
-}
-
-func TestCommandRouterUnknownModelIsRecoverable(t *testing.T) {
-	router, registry := newTestRouter(t, nil)
-	if _, err := registry.New(context.Background(), "cli:default"); err != nil {
-		t.Fatal(err)
-	}
-	_, err := router.Execute(context.Background(), testCommandContext("cli:default"), parseForTest(t, "/model missing"))
-	if err == nil || !channel.IsRecoverable(err) {
-		t.Fatalf("error = %v", err)
+func TestRemovedProductCommandsAreUnknown(t *testing.T) {
+	router, _ := newTestRouter(t, nil)
+	for _, input := range []string{"/model", "/modeling", "/modeling advance mp-0123456789abcdef"} {
+		_, err := router.Execute(context.Background(), testCommandContext("cli:default"), parseForTest(t, input))
+		if err == nil || !channel.IsRecoverable(err) || !strings.Contains(err.Error(), "unknown command") {
+			t.Fatalf("Execute(%q) error = %v", input, err)
+		}
 	}
 }

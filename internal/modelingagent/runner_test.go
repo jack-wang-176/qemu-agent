@@ -13,6 +13,7 @@ import (
 	"github.com/jack-wang-176/qemu-agent/internal/modelingworkflow"
 	"github.com/jack-wang-176/qemu-agent/internal/runstream"
 	"github.com/jack-wang-176/qemu-agent/internal/session"
+	"github.com/jack-wang-176/qemu-agent/internal/tools/security"
 )
 
 type runnerWorkflow struct {
@@ -21,12 +22,15 @@ type runnerWorkflow struct {
 	calls   int
 	call    modelingworkflow.CallContext
 	request modelingworkflow.Request
+	caller  security.Caller
+	secure  bool
 }
 
-func (w *runnerWorkflow) Handle(_ context.Context, call modelingworkflow.CallContext, request modelingworkflow.Request) (modelingworkflow.Result, error) {
+func (w *runnerWorkflow) Handle(ctx context.Context, call modelingworkflow.CallContext, request modelingworkflow.Request) (modelingworkflow.Result, error) {
 	w.calls++
 	w.call = call
 	w.request = request
+	w.caller, w.secure = security.CallerFrom(ctx)
 	return w.result, w.err
 }
 
@@ -80,7 +84,7 @@ func TestRunnerCommitsBoundedWorkflowReply(t *testing.T) {
 	runner := runnerForTest(workflow, store)
 
 	answer, err := runner.Run(context.Background(), live, agent.RunInput{
-		Text: "Model this UART", SessionKey: "cli:default", Channel: "cli", WorkspaceID: "ws-1", UserID: "alice", Events: events,
+		Text: "Model this UART", SessionKey: "cli:default", Channel: "cli", WorkspaceID: "ws-1", UserID: "alice", Interactive: true, Events: events,
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -93,6 +97,16 @@ func TestRunnerCommitsBoundedWorkflowReply(t *testing.T) {
 	}
 	if workflow.call.TraceID != live.TraceID || workflow.call.IdempotencyKey == "" {
 		t.Fatalf("workflow call = %#v", workflow.call)
+	}
+	if !workflow.secure {
+		t.Fatal("workflow context is missing its security caller")
+	}
+	wantCaller := security.Caller{
+		TraceID: live.TraceID, SessionID: live.ID, SessionKey: "cli:default",
+		Channel: "cli", Interactive: true,
+	}
+	if workflow.caller != wantCaller {
+		t.Fatalf("security caller = %#v, want %#v", workflow.caller, wantCaller)
 	}
 	if store.liveSize != initialSize {
 		t.Fatalf("live session changed before Save: size = %d, want %d", store.liveSize, initialSize)

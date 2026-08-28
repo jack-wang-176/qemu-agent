@@ -19,6 +19,7 @@ import (
 	"github.com/jack-wang-176/qemu-agent/internal/pipelineapi"
 	"github.com/jack-wang-176/qemu-agent/internal/runstream"
 	"github.com/jack-wang-176/qemu-agent/internal/session"
+	"github.com/jack-wang-176/qemu-agent/internal/tools/security"
 )
 
 const maxPersistentReplyBytes = 16 * 1024
@@ -130,6 +131,10 @@ func (r *Runner) Run(
 	}
 	bridge := NewEventBridge(emitter, r.logger)
 	workflowCtx := pipelineapi.WithEventPublisher(ctx, bridge)
+	workflowCtx = security.WithCaller(workflowCtx, security.Caller{
+		TraceID: live.TraceID, SessionID: live.ID, SessionKey: in.SessionKey,
+		Channel: in.Channel, Interactive: in.Interactive,
+	})
 	result, err := r.workflow.Handle(workflowCtx, call, modelingworkflow.Request{
 		History:    history,
 		Text:       in.Text,

@@ -1,9 +1,8 @@
 package runstream
 
 // emitter.go owns the *producing* side of the protocol. It exists because there
-// is now more than one producer: the agent loop emits run/turn/tool events, and
-// the /modeling command family emits stage events for a run that has no model
-// turns at all. Both must agree on three things — a strictly increasing
+// is now more than one producer: request runners emit run events and modeling
+// pipeline adapters emit stage events. Both must agree on three things — a strictly increasing
 // sequence, one identity per request, and a payload that matches the type — so
 // those three rules live here instead of once per producer.
 
