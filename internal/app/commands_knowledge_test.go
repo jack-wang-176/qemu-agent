@@ -10,7 +10,6 @@ import (
 
 	"github.com/jack-wang-176/qemu-agent/internal/channel"
 	"github.com/jack-wang-176/qemu-agent/internal/memory"
-	"github.com/jack-wang-176/qemu-agent/internal/modeling"
 	"github.com/jack-wang-176/qemu-agent/internal/session"
 	"github.com/jack-wang-176/qemu-agent/internal/skills"
 )
@@ -53,8 +52,6 @@ func testCommandDependencies(t *testing.T, registry *session.Registry, contextMa
 		Skills:     stubSkills{},
 		Memories:   memory.DisabledStore{},
 		Candidates: memory.DisabledCandidates{},
-		Modeling:   modeling.DisabledRunner{},
-		Apply:      modeling.DisabledApplier{},
 		Now:        func() time.Time { return time.Unix(1000, 0) },
 	}
 }

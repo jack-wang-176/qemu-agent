@@ -74,8 +74,6 @@ type ContextCommands interface {
 
 type ModelCommands interface {
 	Resolve(llm.ModelRef) (llm.ResolvedModel, error)
-	ResolveName(string) (llm.ResolvedModel, error)
-	List() []llm.ModelDefinition
 }
 
 type CommandDependencies struct {
@@ -86,13 +84,7 @@ type CommandDependencies struct {
 	Skills     SkillCommands
 	Memories   MemoryCommands
 	Candidates CandidateCommands
-	// Modeling and Apply are the I8 pipeline. They are two fields rather than one
-	// because they have different disabled forms: a build may be perfectly able to
-	// generate and review a device (Modeling live) while having no QEMU tree to
-	// land it in (Apply disabled).
-	Modeling ModelingCommands
-	Apply    ApplyCommands
-	Now      func() time.Time
+	Now        func() time.Time
 }
 
 type CommandResult struct {
@@ -114,8 +106,6 @@ type CommandRouter struct {
 	skills     SkillCommands
 	memories   MemoryCommands
 	candidates CandidateCommands
-	modeling   ModelingCommands
-	apply      ApplyCommands
 	memoryTopK int
 	now        func() time.Time
 }
@@ -144,16 +134,6 @@ func NewCommandRouter(deps CommandDependencies, cfg CommandConfig) (*CommandRout
 	if deps.Candidates == nil {
 		return nil, errors.New("command router candidates is nil")
 	}
-	// Same rule for the pipeline: a build with modeling off wires
-	// modeling.DisabledRunner and modeling.DisabledApplier, which answer every call
-	// with a category the command layer already knows how to word. A nil here would
-	// mean the object graph is incomplete, so it is a wiring error, not a mode.
-	if deps.Modeling == nil {
-		return nil, errors.New("command router modeling is nil")
-	}
-	if deps.Apply == nil {
-		return nil, errors.New("command router apply is nil")
-	}
 	if cfg.MemoryTopK <= 0 {
 		return nil, errors.New("command router memory top-k must be > 0")
 	}
@@ -168,8 +148,6 @@ func NewCommandRouter(deps CommandDependencies, cfg CommandConfig) (*CommandRout
 		skills:     deps.Skills,
 		memories:   deps.Memories,
 		candidates: deps.Candidates,
-		modeling:   deps.Modeling,
-		apply:      deps.Apply,
 		memoryTopK: cfg.MemoryTopK,
 		now:        deps.Now,
 	}, nil
@@ -197,11 +175,9 @@ func (r *CommandRouter) Execute(ctx context.Context, cc CommandContext, command 
 				"/resume <session-id>",
 				"/history",
 				"/compact",
-				"/model [list|<alias|provider:model>]",
 				"/skills [list|show <name>]",
 				"/remember [--kind=<kind>] [--scope=<scope>] <text>",
 				"/memory list|search <text>|show <id>|forget <id>|pending|approve <id>|reject <id>",
-				"/modeling new <title>|list|show <id>|advance <id> [--stage=<stage>] [--source=<path>] [request]|diff <id>|apply <id>|evidence <id>|reset <id> <stage> --confirm=<id>",
 				"/exit",
 			}, "\n"),
 			Action: channel.ActionReply,
@@ -241,16 +217,12 @@ func (r *CommandRouter) Execute(ctx context.Context, cc CommandContext, command 
 		return r.history(ctx, sessionKey)
 	case "compact":
 		return r.compact(ctx, sessionKey, command.Args)
-	case "model":
-		return r.model(ctx, sessionKey, command.Args)
 	case "skills":
 		return r.skillsCommand(ctx, command.Args)
 	case "remember":
 		return r.remember(ctx, cc, command.Args)
 	case "memory":
 		return r.memoryCommand(ctx, cc, command.Args)
-	case "modeling":
-		return r.modelingCommand(ctx, cc, command.Args)
 	case "exit":
 		if err := requireArgCount(command, 0, "/exit"); err != nil {
 			return CommandResult{}, err
@@ -363,46 +335,4 @@ func (r *CommandRouter) compact(ctx context.Context, key string, args []string) 
 		return CommandResult{}, err
 	}
 	return reply(fmt.Sprintf("compacted messages: %d -> %d", before, after)), nil
-}
-
-func (r *CommandRouter) model(ctx context.Context, key string, args []string) (CommandResult, error) {
-	if len(args) > 1 {
-		return CommandResult{}, userErrorf("usage: /model [list|<alias|provider:model>]")
-	}
-	if len(args) == 0 {
-		current, err := r.sessions.Current(ctx, key)
-		if errors.Is(err, session.ErrNoCurrentSession) {
-			return CommandResult{}, userErrorf("no current session")
-		}
-		if err != nil {
-			return CommandResult{}, fmt.Errorf("get current session: %w", err)
-		}
-		return reply("current model: " + current.ModelRef.String()), nil
-	}
-	if strings.EqualFold(args[0], "list") {
-		definitions := r.models.List()
-		lines := make([]string, 0, len(definitions))
-		for _, def := range definitions {
-			alias := "-"
-			if len(def.Aliases) > 0 {
-				alias = strings.Join(def.Aliases, ",")
-			}
-			lines = append(lines, fmt.Sprintf("%-12s %s context=%d tools=%t stream=%t", alias, def.Ref.String(), def.MaxContext, def.Tools, def.Streaming))
-		}
-		return reply(strings.Join(lines, "\n")), nil
-	}
-	resolved, err := r.models.ResolveName(args[0])
-	if errors.Is(err, llm.ErrModelNotFound) {
-		return CommandResult{}, userErrorf("model %q is not registered; use /model list", args[0])
-	}
-	if err != nil {
-		return CommandResult{}, userErrorf("invalid model %q: %v", args[0], err)
-	}
-	if err := r.updater.Update(ctx, key, func(sess *session.Session) error { sess.ModelRef = resolved.Definition.Ref; return nil }); err != nil {
-		if errors.Is(err, session.ErrNoCurrentSession) {
-			return CommandResult{}, userErrorf("no current session")
-		}
-		return CommandResult{}, fmt.Errorf("switch model: %w", err)
-	}
-	return reply(fmt.Sprintf("model switched to %s; existing history was preserved", resolved.Definition.Ref.String())), nil
 }

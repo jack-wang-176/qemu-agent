@@ -51,6 +51,7 @@ func CloneProjectView(v ProjectView) ProjectView {
 		Recommended:      cloneOperationDescriptors(v.Recommended),
 		Artifacts:        cloneArtifactDescriptors(v.Artifacts),
 		EvidenceCount:    v.EvidenceCount,
+		BlockedReason:    v.BlockedReason,
 		PublicError:      clonePublicError(v.PublicError),
 		CreatedAt:        v.CreatedAt,
 		UpdatedAt:        v.UpdatedAt,

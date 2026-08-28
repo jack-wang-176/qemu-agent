@@ -25,8 +25,8 @@ const (
 	EventRunCompleted  EventType = "run_completed"
 	EventRunFailed     EventType = "run_failed"
 
-	// The three stage events belong to a long-running pipeline run (I8's
-	// /modeling advance). They are their own types rather than free-text notices
+	// The three stage events belong to a long-running pipeline operation. They are
+	// their own types rather than free-text notices
 	// because a stage is a first-class concept: a client has to be able to tell
 	// which stage moved without parsing a sentence.
 	EventStageStarted   EventType = "stage_started"

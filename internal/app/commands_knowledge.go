@@ -41,12 +41,9 @@ type CandidateCommands interface {
 // session key: keys are formatted per channel, and one parsing mistake would
 // decide which user's private memories a command may touch.
 //
-// Interactive and Events are here for the same reason they are on the agent's
-// RunInput: a command that runs for minutes (/modeling advance) has to be able
-// to report progress, and a command that applies a patch has to know whether
-// anybody can be asked for approval. Neither may be inferred from the channel
-// name — the transport declares its capabilities, the command layer only reads
-// them.
+// Interactive and Events mirror the request capabilities carried by RunInput.
+// They support long-running commands and future approved mutations without
+// deriving transport capabilities from a channel name.
 type CommandContext struct {
 	SessionKey  string
 	UserID      string

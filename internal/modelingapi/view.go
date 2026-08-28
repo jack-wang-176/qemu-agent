@@ -2,7 +2,7 @@ package modelingapi
 
 // view.go defines stable caller-facing view DTOs.
 //
-// Design principles (v1-06, parts 3 and 8):
+// Design principles :
 //   - A view is a projection, not a store schema. It hides Stage enums, store paths,
 //     private metadata, and transient runtime fields.
 //   - ProjectView serves callers and is never persisted as project state.
@@ -44,6 +44,7 @@ type ProjectView struct {
 	Recommended      []OperationDescriptor // Supplied by the Engine.
 	Artifacts        []ArtifactDescriptor
 	EvidenceCount    int
+	BlockedReason    string // Stable workflow category; never raw internal error text.
 	PublicError      *PublicError
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
@@ -138,6 +139,14 @@ func ValidateProjectView(v ProjectView) error {
 	}
 	if v.EvidenceCount < 0 {
 		return errInvalid("modelingapi: negative evidence count")
+	}
+	if v.BlockedReason != "" {
+		if v.Status != ProjectBlocked {
+			return errInvalid("modelingapi: blocked reason requires blocked project status")
+		}
+		if v.BlockedReason != "awaiting_apply" {
+			return errInvalid("modelingapi: unknown blocked reason")
+		}
 	}
 	if v.CreatedAt.IsZero() || v.UpdatedAt.IsZero() || v.UpdatedAt.Before(v.CreatedAt) {
 		return errInvalid("modelingapi: invalid project timestamps")

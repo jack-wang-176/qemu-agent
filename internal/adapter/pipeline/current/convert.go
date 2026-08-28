@@ -1,34 +1,34 @@
 package current
 
-// convert.go — modeling ↔ pipelineapi 映射 helper (A3).
+// convert.go - modeling <-> pipelineapi mapping helpers.
 //
-// 这一层只做值映射：
-//   operation ↔ Stage
-//   Project    ↔ EngineView
-//   ArtifactRef ↔ ArtifactDescriptor
-//   RunResult  ↔ ExecuteResult
-//   StageEvent ↔ pipelineapi.Event（通过 eventAdapter）
+// This layer performs value mapping only:
+//   operation   <-> Stage
+//   Project     <-> EngineView
+//   ArtifactRef <-> ArtifactDescriptor
+//   RunResult   <-> ExecuteResult
+//   StageEvent  <-> pipelineapi.Event (through eventAdapter)
 //
-// 不改 Stage 实现；不引入新业务逻辑。
+// It does not change Stage implementations or introduce business logic.
 
 import (
 	"fmt"
-	"strings"
+	"sort"
 
 	"github.com/jack-wang-176/qemu-agent/internal/modeling"
 	"github.com/jack-wang-176/qemu-agent/internal/pipelineapi"
 )
 
-// operationToStage 把 pipelineapi.OperationName 映射为 modeling.Stage。
+// operationToStage maps a pipelineapi.OperationName to modeling.Stage.
 //
-// 当前 five operations 与 Stage 一一对应：
-//   plan / extract / infer / emit / verify
+// The current five operations map one-to-one to stages:
 //
-// 空 operation 不允许进入 Execute —— 调用者应在 modelingapp 层
-// 决定 "current/recommended" 后再调用 Engine。
+//	plan / extract / infer / emit / verify
+//
+// An empty operation must not reach Execute. The modelingapp layer must choose
+// a current or recommended operation before calling the Engine.
 func operationToStage(op pipelineapi.OperationName) (modeling.Stage, error) {
-	s := strings.ToLower(string(op))
-	switch s {
+	switch string(op) {
 	case "plan":
 		return modeling.StagePlan, nil
 	case "extract":
@@ -44,36 +44,35 @@ func operationToStage(op pipelineapi.OperationName) (modeling.Stage, error) {
 	}
 }
 
-// stageToOperation 是反向映射，用于把 Project.Current（Stage）暴露为 EngineView.CurrentOperation。
+// stageToOperation maps a modeling stage back to the operation exposed as
+// EngineView.CurrentOperation.
 func stageToOperation(s modeling.Stage) pipelineapi.OperationName {
 	return pipelineapi.OperationName(string(s))
 }
 
-// toModelingScope 把 pipelineapi.Scope 转为 modeling.Scope。
-//
-// pipelineapi.Scope 是 opaque workspace ID 字符串；
-// modeling.Scope 是 {WorkspaceID, UserID} 元组。
-// 当前 Adapter 用 Scope 字符串作为 WorkspaceID；UserID 暂留空（current Pipeline 不强校验 owner）。
+// toModelingScope maps the trusted pipeline scope to the current modeling scope.
+// Both values preserve WorkspaceID and UserID; the adapter must not drop owner
+// identity while crossing the current implementation boundary.
 func toModelingScope(s pipelineapi.Scope) modeling.Scope {
-	return modeling.Scope{WorkspaceID: string(s)}
+	return modeling.Scope{WorkspaceID: s.WorkspaceID, UserID: s.UserID}
 }
 
-// toEngineView 把 modeling.Project 映射为 pipelineapi.EngineView。
+// toEngineView maps a modeling.Project to pipelineapi.EngineView.
 //
-// 注意：EngineView 保留 Engine 内部语义（Stage enum、done 状态）；
-// modelingapp 负责把 EngineView 映射为对外稳定的 modelingapi.ProjectView。
+// EngineView preserves engine-internal semantics such as the Stage enum and
+// done state. modelingapp maps it to the stable modelingapi.ProjectView.
 func toEngineView(p modeling.Project) pipelineapi.EngineView {
 	return pipelineapi.EngineView{
 		ProjectID:        pipelineapi.ProjectID(p.ID),
-		Title:           p.Title,
-		Revision:        p.Revision,
-		Status:          projectStatusToEngine(p.Status),
+		Title:            p.Title,
+		Revision:         p.Revision,
+		Status:           projectStatusToEngine(p.Status),
 		CurrentOperation: stageToOperation(p.Current),
-		Artifacts:       refsToDescriptors(p),
-		EvidenceCount:   len(p.Evidence),
-		LastError:       p.LastError,
-		CreatedAt:       p.CreatedAt,
-		UpdatedAt:       p.UpdatedAt,
+		Artifacts:        refsToDescriptors(p),
+		EvidenceCount:    len(p.Evidence),
+		LastError:        p.LastError,
+		CreatedAt:        p.CreatedAt,
+		UpdatedAt:        p.UpdatedAt,
 	}
 }
 
@@ -92,22 +91,62 @@ func projectStatusToEngine(s modeling.Status) pipelineapi.ProjectStatus {
 	}
 }
 
-// refsToDescriptors 把 Project.Artifacts（map[Stage][]ArtifactRef）和
-// Evidence 展平为单一 ArtifactDescriptor 列表。
+// refsToDescriptors flattens Project.Artifacts (map[Stage][]ArtifactRef) and
+// Evidence into one ArtifactDescriptor list.
 //
-// EngineView.Artifacts 不区分 stage —— 这是 Engine 视角的简化；
-// 如需按 stage 分组，可由 modelingapp 在映射时处理。
+// EngineView.Artifacts does not group entries by stage; this is an engine-view
+// simplification. modelingapp can regroup entries when needed.
 func refsToDescriptors(p modeling.Project) []pipelineapi.ArtifactDescriptor {
 	var out []pipelineapi.ArtifactDescriptor
-	for stage, refs := range p.Artifacts {
+	stages := append([]modeling.Stage(nil), modeling.StageOrder...)
+	for stage := range p.Artifacts {
+		if !containsStage(stages, stage) {
+			stages = append(stages, stage)
+		}
+	}
+	sort.Slice(stages, func(i, j int) bool {
+		return stageOrderIndex(stages[i]) < stageOrderIndex(stages[j])
+	})
+	for _, stage := range stages {
+		refs := p.Artifacts[stage]
 		for _, r := range refs {
 			out = append(out, refToDescriptor(r, stage))
 		}
 	}
 	for _, r := range p.Evidence {
-		out = append(out, refToDescriptor(r, modeling.StageVerify))
+		out = append(out, refToDescriptor(r, r.Stage))
 	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Operation != out[j].Operation {
+			return stageOrderIndex(modeling.Stage(out[i].Operation)) < stageOrderIndex(modeling.Stage(out[j].Operation))
+		}
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.Before(out[j].CreatedAt)
+		}
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].ID < out[j].ID
+	})
 	return out
+}
+
+func containsStage(stages []modeling.Stage, want modeling.Stage) bool {
+	for _, stage := range stages {
+		if stage == want {
+			return true
+		}
+	}
+	return false
+}
+
+func stageOrderIndex(stage modeling.Stage) int {
+	for index, known := range modeling.StageOrder {
+		if known == stage {
+			return index
+		}
+	}
+	return len(modeling.StageOrder)
 }
 
 func refToDescriptor(r modeling.ArtifactRef, stage modeling.Stage) pipelineapi.ArtifactDescriptor {
@@ -122,7 +161,7 @@ func refToDescriptor(r modeling.ArtifactRef, stage modeling.Stage) pipelineapi.A
 	}
 }
 
-// toExecuteResult 把 modeling.RunResult 映射为 pipelineapi.ExecuteResult。
+// toExecuteResult maps a modeling.RunResult to pipelineapi.ExecuteResult.
 func toExecuteResult(r modeling.RunResult) pipelineapi.ExecuteResult {
 	return pipelineapi.ExecuteResult{
 		Project:   toEngineView(r.Project),
@@ -165,20 +204,25 @@ func evidenceFromRunResult(r modeling.RunResult) []pipelineapi.ArtifactDescripto
 	return out
 }
 
-// sourcesToStrings 把 pipelineapi.SourceRef 列表转为 modeling.RunRequest.Sources 所需的 []string。
+// sourcesToStrings converts pipelineapi.SourceRef values to the []string
+// expected by modeling.RunRequest.Sources.
 //
-// 当前 Pipeline 把 sources 当作"逻辑 workspace path"列表使用；
-// Kind 与 Digest 在 current Adapter 阶段暂不透传给 Pipeline。
-func sourcesToStrings(srcs []pipelineapi.SourceRef) []string {
+// The current Pipeline treats sources as logical workspace paths. Kind and
+// Digest are not forwarded to Pipeline at this adapter stage.
+func sourcesToStrings(srcs []pipelineapi.SourceRef) ([]string, error) {
 	if len(srcs) == 0 {
-		return nil
+		return nil, nil
 	}
 	out := make([]string, 0, len(srcs))
 	for _, s := range srcs {
-		// 仅 workspace_path 类型被 current Pipeline 识别。
-		if s.Kind == "workspace_path" || s.Kind == "" {
-			out = append(out, s.Value)
+		// The current Pipeline recognizes only workspace_path sources.
+		if s.Kind != "workspace_path" {
+			return nil, fmt.Errorf("current engine: unsupported source kind %q", s.Kind)
 		}
+		if s.Digest != "" {
+			return nil, fmt.Errorf("current engine: source digest verification is unsupported")
+		}
+		out = append(out, s.Value)
 	}
-	return out
+	return out, nil
 }

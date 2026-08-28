@@ -23,6 +23,7 @@ func configureTestEnvironment(t *testing.T) {
 	t.Setenv("QEMU_AGENT_PROVIDER", "ollama")
 	t.Setenv("QEMU_AGENT_WORKSPACE", t.TempDir())
 	t.Setenv("QEMU_AGENT_DATA_DIR", t.TempDir())
+	t.Setenv("QEMU_AGENT_MODELING_ENABLED", "true")
 }
 
 func TestRunWithIOOneShotCommand(t *testing.T) {

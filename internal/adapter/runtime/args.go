@@ -2,15 +2,15 @@ package runtime
 
 // args.go — EffectRequest.Args []byte JSON → map[string]any helper.
 //
-// effect.go 依赖此 helper 把 JSON args 解析为 ToolRunner 期望的 map。
+// effect.go uses this helper to decode JSON arguments into the map expected by ToolRunner.
 
 import (
 	"encoding/json"
 	"fmt"
 )
 
-// parseArgsToMap 把 []byte JSON 解析为 map[string]any。
-// 空输入返回空 map（不是 nil），便于 ToolRunner 接受。
+// parseArgsToMap decodes JSON arguments into map[string]any.
+// Empty input produces a non-nil empty map for ToolRunner compatibility.
 func parseArgsToMap(args []byte) (map[string]any, error) {
 	if len(args) == 0 {
 		return map[string]any{}, nil

@@ -1,73 +1,80 @@
 package pipelineapi
 
-// engine.go — 可替换流水线 Engine 契约。
+// engine.go - Contract for a replaceable pipeline engine.
 //
-// 设计原则（v1-04 第五、六部分）：
-//   - Engine 面向 modelingapp，实现可替换。current Pipeline 与未来 Pipeline 都可接入。
-//   - 只表达 Pipeline operation，不表达 CLI command、MCP request 或 Agent tool call。
-//   - 不依赖 app/channel/session/runstream/modeling。
-//   - Execute 只发布 operation 领域事件，不发布 request-level run_started（那是入口外壳协议）。
-//   - 组合根是唯一创建 current Engine 实现的位置。
-//
-// 与 modelingapi 的关系：
-//   modelingapi 面向入口（CLI/Agent/MCP），稳定且产品化。
-//   pipelineapi 面向 Engine，实现可替换。
-//   modelingapi 不 import pipelineapi；modelingapp 桥接二者。
+// The engine contract contains pipeline operations only. It is independent of
+// CLI commands, MCP requests, Agent tool calls, and the current modeling package.
+// modelingapp bridges this internal contract to the stable modelingapi product API.
 
 import (
 	"context"
 	"time"
 )
 
-// Scope 是 Repository 的授权 scope（opaque workspace ID）。
-type Scope string
+// Scope is the trusted authorization tuple for repository and engine access.
+// It is derived from modelingapi.CallContext and never from untrusted request DTOs.
+type Scope struct {
+	WorkspaceID string
+	UserID      string
+}
 
-// ProjectID 是 opaque 项目标识。
+// InvocationContext carries trusted request correlation and caller metadata.
+// It contains no paths, secrets, or transport-specific request objects.
+type InvocationContext struct {
+	RequestID   string
+	TraceID     string
+	SessionID   string
+	SessionKey  string
+	Channel     string
+	Interactive bool
+}
+
+// ProjectID is an opaque project identifier.
 type ProjectID string
 
-// ArtifactID 是 opaque artifact 标识。
+// ArtifactID is an opaque artifact identifier.
 type ArtifactID string
 
-// OperationName 是可发现的 operation 名。
+// OperationName is the name of a discoverable operation.
 type OperationName string
 
-// Engine 是可替换流水线契约。
+// Engine is a replaceable pipeline engine.
 //
-// modelingapp 通过 Engine 完成具体 operation；current Adapter（A3）将 modeling.Pipeline
-// 包装为 Engine，未来 Pipeline（B 系列）实现同一接口。
+// modelingapp executes concrete operations through Engine. The current adapter wraps
+// modeling.Pipeline, while future pipelines implement the same interface.
 type Engine interface {
-	// Describe 返回当前 Engine 的能力描述，不依赖具体 Project。
+	// Describe returns engine capabilities without requiring a concrete project.
 	Describe(ctx context.Context, req DescribeRequest) (Description, error)
 
-	// Inspect 读取一个已存在 Project 的当前快照，不执行 operation。
+	// Inspect reads an existing project snapshot without executing an operation.
 	Inspect(ctx context.Context, req InspectRequest) (EngineView, error)
 
-	// Execute 在给定 Project 上执行一次 operation。
-	// 返回 ExecuteResult，包含产生的 Artifact、状态变化与摘要。
-	// operation 领域事件通过 ExecuteRequest.Ports.Event 发布。
+	// Execute runs an operation for the provided project.
+	// It returns artifacts, status changes, and execution details. Operation events
+	// are published through ExecuteRequest.Ports.Event.
 	Execute(ctx context.Context, req ExecuteRequest) (ExecuteResult, error)
 }
 
-// DescribeRequest 是 Describe 的入参。
+// DescribeRequest is the input to Describe.
 type DescribeRequest struct {
 	Scope Scope
 }
 
-// Description 是 Describe 的返回值。
+// Description is the result returned by Describe.
 type Description struct {
 	EngineName    string
 	EngineVersion string
-	APIVersion    string // 例如 "v1"，与 modelingapi.Capabilities.APIVersion 对齐
+	APIVersion    string // For example, "v1"; aligned with modelingapi.Capabilities.
 	Operations    []OperationDescriptor
 	ArtifactKinds []string
-	// 支持特性（与 modelingapi.Capabilities 对齐，但由 Engine 决定）
+	// Feature support is determined by the engine.
 	SupportsApply    bool
 	SupportsEvidence bool
 	SupportsCancel   bool
 	SupportsProgress bool
 }
 
-// OperationDescriptor 描述一个可发现的 operation。
+// OperationDescriptor describes a discoverable operation.
 type OperationDescriptor struct {
 	Name            OperationName
 	DisplayName     string
@@ -77,18 +84,15 @@ type OperationDescriptor struct {
 	MayBlock        bool
 }
 
-// InspectRequest 是 Inspect 的入参。
+// InspectRequest is the input to Inspect.
 type InspectRequest struct {
 	Scope     Scope
 	ProjectID ProjectID
-	Revision  int // <=0 表示读最新
+	Revision  int // A non-positive value selects the newest revision.
 }
 
-// EngineView 是 Inspect 的返回值，Engine 视角的项目快照。
-//
-// 与 modelingapi.ProjectView 的区别：
-//   EngineView 面向 Engine/modelingapp，可包含 Engine 内部状态（Stage、运行中临时字段）。
-//   modelingapp 负责把 EngineView 映射为对外稳定的 modelingapi.ProjectView。
+// EngineView is the internal engine projection returned by Inspect.
+// modelingapp maps it to the stable caller-facing modelingapi.ProjectView.
 type EngineView struct {
 	ProjectID        ProjectID
 	Title            string
@@ -98,39 +102,40 @@ type EngineView struct {
 	Recommended      []OperationDescriptor
 	Artifacts        []ArtifactDescriptor
 	EvidenceCount    int
-	LastError        string // Engine 内部错误类别，不是公开 PublicError
+	LastError        string // Internal error category, never a public error message.
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }
 
-// ExecuteRequest 是 Execute 的入参。
+// ExecuteRequest is the input to Execute.
 //
-// Pipeline 只声明逻辑 operation，不构造 CLI/MCP 调用。
-// Ports 由 modelingapp/Adapter 注入可信运行时基础设施。
+// The pipeline declares logical operations; it does not build CLI or MCP invocations.
+// Runtime infrastructure is injected through Ports by modelingapp or an adapter.
 type ExecuteRequest struct {
 	Project          ProjectSnapshot
 	Operation        OperationName
 	Instruction      string
 	Sources          []SourceRef
 	ExpectedRevision int
+	Invocation       InvocationContext
 	Ports            RuntimePorts
 }
 
-// ProjectSnapshot 是 Execute 的入参项目快照（Engine 从此快照开始执行）。
+// ProjectSnapshot identifies the revision from which Execute must start.
 type ProjectSnapshot struct {
 	ID       ProjectID
 	Scope    Scope
 	Revision int
 }
 
-// SourceRef 是外部传入的不可信来源引用。
+// SourceRef identifies an external input and its optional digest.
 type SourceRef struct {
 	Kind   string
 	Value  string
 	Digest string
 }
 
-// ExecuteResult 是 Execute 的返回值。
+// ExecuteResult is the result returned by Execute.
 type ExecuteResult struct {
 	Project   EngineView
 	Operation OperationName
@@ -140,19 +145,51 @@ type ExecuteResult struct {
 	Summary   string
 	Blocked   bool
 	Reason    string
+	Apply     *ApplyOutcome
 }
 
-// ProjectStatus 是 Engine 视角的内部状态（保留 modeling 内部语义）。
+// ApplyOutcome preserves successful and partial source-tree landing results.
+// A non-nil outcome may be returned together with an error.
+type ApplyOutcome struct {
+	Written  []string
+	Skipped  []string
+	Partial  bool
+	Reason   string
+	Evidence []ArtifactDescriptor
+}
+
+// ApplyPreview binds approval to a specific project revision and diff.
+type ApplyPreview struct {
+	ID              string
+	ProjectID       ProjectID
+	ProjectRevision int
+	Diff            ArtifactDescriptor
+	Files           []FileChange
+	Summary         string
+	ExpiresAt       time.Time
+}
+
+// FileChange describes one path-relative source-tree change.
+type FileChange struct {
+	Path      string
+	Kind      string
+	OldBytes  int64
+	NewBytes  int64
+	OldDigest string
+	NewDigest string
+}
+
+// ProjectStatus is the engine-facing project state.
 type ProjectStatus string
 
 const (
 	StatusPending ProjectStatus = "pending"
 	StatusRunning ProjectStatus = "running"
 	StatusBlocked ProjectStatus = "blocked"
-	StatusDone    ProjectStatus = "done" // Engine 内部用 done，modelingapp 映射为 completed
+	StatusDone    ProjectStatus = "done" // modelingapp maps this internal value to completed.
 )
 
-// OperationStatus 是一次 operation 调用的结果状态。
+// OperationStatus is the outcome of one operation invocation.
 type OperationStatus string
 
 const (
@@ -161,7 +198,7 @@ const (
 	OpFailed    OperationStatus = "failed"
 )
 
-// ArtifactDescriptor 是 Engine 视角的 artifact 描述。
+// ArtifactDescriptor is the engine-facing, content-free artifact projection.
 type ArtifactDescriptor struct {
 	ID        ArtifactID
 	Operation OperationName

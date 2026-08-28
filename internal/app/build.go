@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/jack-wang-176/qemu-agent/internal/agent"
 	"github.com/jack-wang-176/qemu-agent/internal/app/build"
 	"github.com/jack-wang-176/qemu-agent/internal/channel"
 	"github.com/jack-wang-176/qemu-agent/internal/channel/cli"
@@ -86,14 +85,16 @@ func validateBuildInput(input BuildInput) error {
 	if input.Config.Channel.CLIEnabled && input.CLI.ErrOutput == nil {
 		return errors.New("build CLI error output is nil")
 	}
-	return input.Config.Validate()
+	if err := input.Config.Validate(); err != nil {
+		return err
+	}
+	return input.Config.ValidateProfessionalModelingV1()
 }
 
 func Build(input BuildInput) (*Runtime, error) {
 	if err := validateBuildInput(input); err != nil {
 		return nil, fmt.Errorf("validate config: %w", err)
 	}
-
 	logger, err := obs.NewLogger(
 		input.Config.Log,
 		input.LogOutput,
@@ -168,39 +169,12 @@ func Build(input BuildInput) (*Runtime, error) {
 		return nil, fmt.Errorf("build secure tool executor: %w", err)
 	}
 
-	// Modeling needs two tool roots, not one, because its two halves reach into two
-	// different trees:
-	//
-	//   - the pipeline reads datasheets, which the operator drops in Paths.Workspace,
-	//     and shells out to ninja with an absolute `cd <BuildDir>`. A workspace root
-	//     serves both: the bash tool only sets the child's working directory, it does
-	//     not confine the command, so verify reaches the build tree regardless.
-	//   - the applier writes hw/... files, which only exist under QemuRoot.
-	//
-	// Handing the pipeline the QEMU-rooted catalog would make extract refuse every
-	// datasheet; handing the applier the workspace-rooted one would make it write
-	// device code into the workspace. So the agent's own executor — already rooted at
-	// Paths.Workspace — is reused for the pipeline, and only the applier gets a new
-	// one. Both share the policy, the approver, the redactor and the audit sink, so a
-	// write into QEMU is judged and logged exactly like any other write.
-	//
-	// The applier's executor stays nil when QemuRoot is unset; BuildModeling turns
-	// that into a disabled applier while leaving the pipeline usable.
+	// The professional v1 pipeline reads sources and runs stage tools through the
+	// workspace-rooted audited executor. It stops at awaiting_apply, so the
+	// composition root deliberately does not construct a QEMU-rooted apply executor.
 	var modelingExecutor build.ToolExecutor
-	var applyExecutor build.ToolExecutor
 	if input.Config.Modeling.Enabled {
 		modelingExecutor = executor
-		if root := strings.TrimSpace(input.Config.Modeling.QemuRoot); root != "" {
-			modelingManager, err := build.BuildModelingToolManager(root, input.Config.Tools)
-			if err != nil {
-				return nil, fmt.Errorf("build modeling tool manager: %w", err)
-			}
-			created, err := security.NewExecutor(security.ExecutorDependencies{Catalog: modelingManager, Policy: policy, Approver: approver, Audit: auditSink, Redactor: redactor}, input.Config.Security.ApprovalTimeout)
-			if err != nil {
-				return nil, fmt.Errorf("build modeling tool executor: %w", err)
-			}
-			applyExecutor = created
-		}
 	}
 
 	contextManager, err := build.BuildContextManager(
@@ -255,19 +229,37 @@ func Build(input BuildInput) (*Runtime, error) {
 		modelingCompleter = providerCompleter
 	}
 
-	// The modeling layer, like the knowledge layer, returns non-nil implementations
-	// even when disabled: with QEMU_AGENT_MODELING_ENABLED unset the router still
-	// gets a working pair that answers "modeling is disabled", so /modeling exists
-	// and explains itself rather than being absent.
+	// Build the current five-stage implementation and its request-scoped runtime
+	// factory. Professional configuration was validated before any resources opened.
 	modelingLayer, err := build.BuildModeling(build.ModelingInput{
-		Config:        input.Config,
-		Logger:        logger,
-		Executor:      modelingExecutor,
-		ApplyExecutor: applyExecutor,
-		Completer:     modelingCompleter,
+		Config:    input.Config,
+		Logger:    logger,
+		Executor:  modelingExecutor,
+		Completer: modelingCompleter,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("build modeling layer: %w", err)
+	}
+
+	serviceLayer, err := build.BuildModelingService(build.ModelingServiceInput{
+		Legacy: modelingLayer,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("build modeling service: %w", err)
+	}
+	workflowLayer, err := build.BuildModelingWorkflow(build.ModelingWorkflowInput{
+		Config:       input.Config,
+		Modeling:     serviceLayer.Service,
+		Models:       models,
+		DefaultModel: defaultRef,
+		Context:      contextManager,
+		Prompts:      knowledge.Assembler,
+		Store:        store,
+		Logger:       logger,
+		NewID:        uuid.NewString,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("build modeling workflow: %w", err)
 	}
 
 	commands, err := NewCommandRouter(CommandDependencies{
@@ -278,38 +270,13 @@ func Build(input BuildInput) (*Runtime, error) {
 		Skills:     skillRegistry,
 		Memories:   knowledge.Store,
 		Candidates: knowledge.Candidates,
-		Modeling:   modelingLayer.Runner,
-		Apply:      modelingLayer.Applier,
 	}, CommandConfig{MemoryTopK: memoryTopK(input.Config)})
 	if err != nil {
 		return nil, fmt.Errorf("build command router: %w", err)
 	}
 
-	runner, err := agent.New(
-		agent.Dependencies{
-			Models:   models,
-			Catalog:  manager,
-			Executor: executor,
-			Store:    store,
-			Context:  contextManager,
-			Prompts:  knowledge.Assembler,
-			Logger:   logger,
-			NewID:    uuid.NewString,
-		},
-		agent.Config{
-			MaxTurns:             input.Config.Agent.MaxTurns,
-			Stream:               input.Config.Agent.Stream,
-			MemoryTopK:           memoryTopK(input.Config),
-			PromptReservedTokens: input.Config.Prompt.ReservedContextTokens,
-			PromptMaxBytes:       input.Config.Prompt.MaxInjectedBytes,
-		},
-	)
-	if err != nil {
-		return nil, fmt.Errorf("build agent: %w", err)
-	}
-
 	application, err := NewApplication(Dependencies{
-		Runner:      runner,
+		Runner:      workflowLayer.Runner,
 		Sessions:    registry,
 		Commands:    commands,
 		Extractor:   knowledge.Extractor,

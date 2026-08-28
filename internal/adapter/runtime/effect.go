@@ -2,45 +2,43 @@ package runtime
 
 // effect.go — Effect Port Adapter (A4).
 //
-// 把现有 modeling.ToolRunner（基于 security.Executor）包装为
-// pipelineapi.Effect。Engine 只声明逻辑 effect 名和参数；
-// 可信 identity 从 CallContext 经 Application/Adapter 注入。
+// Wraps the existing modeling.ToolRunner (backed by security.Executor) as
+// pipelineapi.Effect. The Engine declares only a logical effect name and
+// arguments; trusted identity is injected by the application/adapter layer.
 //
-// 设计原则（v1-04 第六部分）：
-//   - 第一阶段 Adapter 复用 security.Executor；
-//   - Engine 不构造 security.Caller，由 Adapter 映射。
+// Design rules (v1-04, section six): reuse security.Executor in this phase;
+// the Engine never constructs a security caller and the adapter performs mapping.
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jack-wang-176/qemu-agent/internal/modeling"
 	"github.com/jack-wang-176/qemu-agent/internal/pipelineapi"
 )
 
-// EffectAdapter 包住 modeling.ToolRunner。
+// EffectAdapter wraps modeling.ToolRunner.
 type EffectAdapter struct {
 	tools modeling.ToolRunner
 }
 
-// NewEffectAdapter 构造 Effect Port Adapter。
+// NewEffectAdapter constructs the effect port adapter.
 func NewEffectAdapter(tools modeling.ToolRunner) *EffectAdapter {
 	return &EffectAdapter{tools: tools}
 }
 
-// Invoke 实现 pipelineapi.Effect。
+// Invoke implements pipelineapi.Effect.
 //
-// pipelineapi.EffectRequest 携带 Name + Args + Caller；
-// 现有 modeling.ToolRunner.Run 接受 (name string, args map[string]any)，
-// 因此 Adapter：
-//   1. 把 EffectRequest.Args 当作 JSON map 传给 ToolRunner；
-//   2. Caller 在第一阶段不透传给 ToolRunner（current Pipeline 不用 caller identity）；
-//   3. ToolRunner 返回的 tools.ExecutionResult 映射为 EffectResult。
+// EffectRequest carries Name, Args, and Caller. ToolRunner.Run accepts a name
+// and map, so the adapter decodes JSON arguments and maps its result to EffectResult.
 //
-// 注意：EffectRequest.Args 是 []byte（JSON）。
-// 这里先把它解析为 map[string]any 再传给 ToolRunner。
+// EffectRequest.Args is JSON bytes and is decoded before invoking ToolRunner.
 func (a *EffectAdapter) Invoke(ctx context.Context, req pipelineapi.EffectRequest) (pipelineapi.EffectResult, error) {
-	// Args 是 []byte JSON；parse 为 map[string]any 供 ToolRunner 使用。
+	if a == nil || a.tools == nil {
+		return pipelineapi.EffectResult{}, errors.New("runtime adapter: effect dependency is nil")
+	}
+	// Decode JSON arguments into the map expected by ToolRunner.
 	args, err := parseArgsToMap(req.Args)
 	if err != nil {
 		return pipelineapi.EffectResult{
@@ -57,8 +55,8 @@ func (a *EffectAdapter) Invoke(ctx context.Context, req pipelineapi.EffectReques
 		}, nil
 	}
 
-	// tools.ExecutionResult 只含 ModelOutput/PersistentOutput，无 OK/Stdout/Stderr。
-	// 失败信号通过 err 上面已处理；这里视为 succeeded。
+	// ExecutionResult exposes model and persistent output only. Errors were
+	// handled above, so a returned result is considered successful.
 	return pipelineapi.EffectResult{
 		Status: pipelineapi.EffectSucceeded,
 		Output: []byte(result.ModelOutput),
