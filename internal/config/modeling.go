@@ -1,6 +1,6 @@
 package config
 
-// modeling.go closes the I8 device-modeling pipeline configuration: the value
+// modeling.go closes the device-modeling pipeline configuration: the value
 // group, its environment loader and its validation.
 //
 // Modeling differs from Skills and Memory in one dangerous way. Those two only
@@ -23,7 +23,7 @@ import (
 // pipeline. It contains values only; the stores and the Pipeline are created by
 // internal/app/build.
 type ModelingConfig struct {
-	// Enabled gates the whole capability. Default false: I8 is a new feature
+	// Enabled gates the whole capability. Default false: modeling is opt-in
 	// and must not change the behaviour of an existing deployment.
 	Enabled bool
 	// Dir is the absolute root for project state and artifacts.
@@ -186,10 +186,10 @@ func (c Config) ValidateProfessionalModelingV1() error {
 		return err
 	}
 	if !c.Modeling.Enabled {
-		return errors.New("professional modeling v1 requires QEMU_AGENT_MODELING_ENABLED=true")
+		return errors.New("professional modeling requires QEMU_AGENT_MODELING_ENABLED=true")
 	}
 	if c.Modeling.AutoApply {
-		return errors.New("professional modeling v1 requires QEMU_AGENT_MODELING_AUTO_APPLY=false")
+		return errors.New("professional modeling requires QEMU_AGENT_MODELING_AUTO_APPLY=false")
 	}
 	return nil
 }

@@ -1,8 +1,8 @@
 package agent
 
 // emit.go binds the run loop to the request's event stream. Sequencing,
-// identity stamping and payload validation live in runstream (the /modeling
-// command path emits into the same stream and must obey the same rules); what is
+// identity stamping and payload validation live in runstream; pipeline stages
+// emit into the same stream and must obey the same rules. What is
 // left here is the agent's own precondition: an event stream is only meaningful
 // once a session exists, because SessionID and TraceID come from it.
 

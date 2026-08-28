@@ -242,7 +242,7 @@ func (h *modelingHarness) advance(t *testing.T, ctx context.Context, id string, 
 }
 
 // callerCtx attaches the identity the tool adapter requires. In production the
-// /modeling command does this; a test that drives the Runner directly has to do
+// The former command entry did this; a test that drives the Runner directly has to do
 // the same, which is itself worth asserting — see TestModelingRefusesWithoutCaller.
 func callerCtx() context.Context {
 	return security.WithCaller(context.Background(), security.Caller{

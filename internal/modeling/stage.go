@@ -115,7 +115,7 @@ const (
 )
 
 // StageEvent is a notification, not a data channel: a client that saw
-// stage_completed still has to call /modeling show to read anything. That is why
+// stage_completed still has to call the project read API to read anything. That is why
 // Text is capped and why losing an event cannot make the result wrong.
 type StageEvent struct {
 	Kind    EventKind
