@@ -111,7 +111,7 @@ func (r *CommandRouter) skillsCommand(ctx context.Context, args []string) (Comma
 		if len(meta.RequiredTools) > 0 {
 			lines = append(lines, "required tools: "+strings.Join(meta.RequiredTools, ","))
 		}
-		// A preview only. The full body is loaded through use_skill so it goes
+		// A bounded summary only. The full body is loaded through use_skill so it goes
 		// through the tool policy, the audit log and the prompt budget.
 		lines = append(lines, "", truncateRunes(skill.Body, skillBodyLimit))
 		return reply(strings.Join(lines, "\n")), nil

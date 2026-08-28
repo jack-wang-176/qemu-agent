@@ -128,7 +128,7 @@ func TestTextRequestRenderer(t *testing.T) {
 	}
 }
 
-// TestTextRequestRendererHandlesStageEvents pins the rendering of a /modeling
+// TestTextRequestRendererHandlesStageEvents pins the rendering of stage events
 // advance: one line per stage transition, and a blocked stage worded differently
 // from a failed one.
 func TestTextRequestRendererHandlesStageEvents(t *testing.T) {

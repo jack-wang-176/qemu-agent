@@ -68,7 +68,7 @@ const (
 	DefaultPromptMaxMemoryItems = DefaultMemoryTopK
 	MaxMemoryTopK               = 100
 
-	// Modeling default. Disabled by default because I8 writes into a QEMU
+	// Modeling default. Disabled by default because modeling may write into a QEMU
 	// source tree, which is outside the workspace sandbox; AutoApply is off for
 	// the same reason — Emit produces a staged plan, and landing it is a
 	// separate, approved step.

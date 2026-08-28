@@ -183,7 +183,7 @@ func (r *TextRequestRenderer) StreamedText() bool { return r.streamedText }
 
 // stageOutcomeLine renders the three ways a stage can end. Blocked is not a
 // failure — it means the stage did its work and a human has to act — so it must
-// not be rendered like one, or every /modeling emit would look broken.
+// not be rendered like one, or every stage emit would look broken.
 func stageOutcomeLine(event runstream.Event) string {
 	switch {
 	case event.ErrorKind != "":
