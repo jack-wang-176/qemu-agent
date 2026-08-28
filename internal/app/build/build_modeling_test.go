@@ -156,6 +156,9 @@ func TestBuildModelingWithoutQemuRootKeepsApplierDisabled(t *testing.T) {
 	if _, ok := components.Applier.(modeling.DisabledApplier); !ok {
 		t.Errorf("applier = %T; want DisabledApplier when QemuRoot is empty", components.Applier)
 	}
+	if components.Runtime == nil {
+		t.Fatal("runtime factory is nil for enabled modeling")
+	}
 	// The runner, by contrast, is real: a project can be created and listed.
 	scope := modeling.Scope{WorkspaceID: components.WorkspaceID, UserID: "user-1"}
 	project, err := components.Runner.Create(context.Background(), "k230 rmu", scope)

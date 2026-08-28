@@ -178,6 +178,23 @@ func (c Config) validateModeling() error {
 	return nil
 }
 
+// ValidateProfessionalModelingV1 validates the stricter product contract used
+// by the professional modeling workflow. The legacy command path may remain
+// disabled or use AutoApply, so this check is intentionally separate from
+// Config.Validate until the composition root is switched in Step 12.
+func (c Config) ValidateProfessionalModelingV1() error {
+	if err := c.validateModeling(); err != nil {
+		return err
+	}
+	if !c.Modeling.Enabled {
+		return errors.New("professional modeling v1 requires QEMU_AGENT_MODELING_ENABLED=true")
+	}
+	if c.Modeling.AutoApply {
+		return errors.New("professional modeling v1 requires QEMU_AGENT_MODELING_AUTO_APPLY=false")
+	}
+	return nil
+}
+
 // skillDirIfEnabled and memoryDirIfEnabled return an empty string for a
 // disabled capability, which requireDisjointDir treats as "nothing to compare".
 // A disabled capability has no directory on disk, so an overlap with it cannot

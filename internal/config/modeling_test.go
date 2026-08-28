@@ -79,6 +79,25 @@ func TestValidateModelingAcceptsAutoApplyWithQemuRoot(t *testing.T) {
 	}
 }
 
+func TestValidateProfessionalModelingV1RequiresEnabledWithoutAutoApply(t *testing.T) {
+	disabled := modelingBase(t)
+	disabled.Modeling.Enabled = false
+	if err := disabled.ValidateProfessionalModelingV1(); err == nil {
+		t.Fatal("professional validation accepted disabled modeling")
+	}
+
+	auto := modelingBase(t)
+	auto.Modeling.QemuRoot = t.TempDir()
+	auto.Modeling.AutoApply = true
+	if err := auto.ValidateProfessionalModelingV1(); err == nil {
+		t.Fatal("professional validation accepted auto apply")
+	}
+
+	if err := modelingBase(t).ValidateProfessionalModelingV1(); err != nil {
+		t.Fatalf("professional validation rejected v1 configuration: %v", err)
+	}
+}
+
 func TestLoadPopulatesModelingDefaults(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	data := t.TempDir()

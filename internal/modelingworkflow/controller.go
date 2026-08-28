@@ -25,11 +25,12 @@ type Dependencies struct {
 }
 
 type Config struct {
-	MaxOpertionPerTurn int
-	ArtifactReadLimit  int
+	MaxOperationsPerTurn int
+	ArtifactReadLimit    int
 }
 
 const defaultArtifactReadLimit = modelingapi.MaxPageSize
+const defaultMaxOperationsPerTurn = 1
 
 type Controller struct {
 	modeling          modelingapi.Service
@@ -39,9 +40,47 @@ type Controller struct {
 	maxOperations     int
 	artifactReadLimit int
 	now               func() time.Time
+	logger            *slog.Logger
 }
 
 var _ Service = (*Controller)(nil)
+
+func NewController(deps Dependencies, cfg Config) (*Controller, error) {
+	switch {
+	case deps.Modeling == nil:
+		return nil, errors.New("modelingworkflow: modeling service is nil")
+	case deps.Binding == nil:
+		return nil, errors.New("modelingworkflow: binding store is nil")
+	case deps.Interpreter == nil:
+		return nil, errors.New("modelingworkflow: interpreter is nil")
+	case deps.Presenter == nil:
+		return nil, errors.New("modelingworkflow: presenter is nil")
+	case deps.Logger == nil:
+		return nil, errors.New("modelingworkflow: logger is nil")
+	case cfg.MaxOperationsPerTurn < 0:
+		return nil, errors.New("modelingworkflow: max operations per turn must not be negative")
+	case cfg.ArtifactReadLimit < 0 || cfg.ArtifactReadLimit > modelingapi.MaxPageSize:
+		return nil, fmt.Errorf("modelingworkflow: artifact read limit must be between 0 and %d", modelingapi.MaxPageSize)
+	}
+	maxOperations := cfg.MaxOperationsPerTurn
+	if maxOperations == 0 {
+		maxOperations = defaultMaxOperationsPerTurn
+	}
+	artifactReadLimit := cfg.ArtifactReadLimit
+	if artifactReadLimit == 0 {
+		artifactReadLimit = defaultArtifactReadLimit
+	}
+	now := deps.Now
+	if now == nil {
+		now = func() time.Time { return time.Now().UTC() }
+	}
+	return &Controller{
+		modeling: deps.Modeling, binding: deps.Binding,
+		Interpreter: deps.Interpreter, Presenter: deps.Presenter,
+		maxOperations: maxOperations, artifactReadLimit: artifactReadLimit,
+		now: now, logger: deps.Logger,
+	}, nil
+}
 
 func (c *Controller) Handle(
 	ctx context.Context,

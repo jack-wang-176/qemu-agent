@@ -94,18 +94,24 @@ func testPorts() pipelineapi.RuntimePorts {
 	return pipelineapi.RuntimePorts{Repository: fakeRepository{}, Completion: fakeCompletion{}, Effect: fakeEffect{}, Event: fakePublisher{}}
 }
 
+func testRuntimeFactory() RuntimeFactory {
+	return runtimeFactoryFunc(func(context.Context, pipelineapi.Scope, pipelineapi.InvocationContext) (pipelineapi.RuntimePorts, error) {
+		return testPorts(), nil
+	})
+}
+
 func TestNewServiceValidatesDependencies(t *testing.T) {
 	if _, err := NewService(Dependencies{}); err == nil {
 		t.Fatal("expected invalid dependencies")
 	}
-	if _, err := NewService(Dependencies{RuntimePorts: testPorts(), QueryPort: fakeQuery{}}); err == nil {
+	if _, err := NewService(Dependencies{RuntimePorts: testRuntimeFactory(), QueryPort: fakeQuery{}}); err == nil {
 		t.Fatal("expected missing engine")
 	}
 }
 
 func TestShowProjectsLatestView(t *testing.T) {
 	engine := &fakeEngine{view: testView()}
-	service, err := NewService(Dependencies{RuntimePorts: testPorts(), QueryPort: fakeQuery{}, Engine: engine})
+	service, err := NewService(Dependencies{RuntimePorts: testRuntimeFactory(), QueryPort: fakeQuery{}, Engine: engine})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,11 +126,13 @@ func TestShowProjectsLatestView(t *testing.T) {
 
 func TestAdvanceUsesInspectedSnapshotAndCurrentOperation(t *testing.T) {
 	engine := &fakeEngine{view: testView()}
-	service, err := NewService(Dependencies{RuntimePorts: testPorts(), QueryPort: fakeQuery{}, Engine: engine})
+	service, err := NewService(Dependencies{RuntimePorts: testRuntimeFactory(), QueryPort: fakeQuery{}, Engine: engine})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = service.Advance(context.Background(), testCall(), modelingapi.AdvanceRequest{ProjectID: "mp-0123456789abcdef", ExpectedRevision: 3})
+	_, err = service.Advance(context.Background(), testCall(), modelingapi.AdvanceRequest{
+		ProjectID: "mp-0123456789abcdef", Operation: "plan", ExpectedRevision: 3,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +142,7 @@ func TestAdvanceUsesInspectedSnapshotAndCurrentOperation(t *testing.T) {
 }
 
 func TestUnsupportedApplyReturnsPublicUnavailable(t *testing.T) {
-	service, err := NewService(Dependencies{RuntimePorts: testPorts(), QueryPort: fakeQuery{}, Engine: &fakeEngine{view: testView()}})
+	service, err := NewService(Dependencies{RuntimePorts: testRuntimeFactory(), QueryPort: fakeQuery{}, Engine: &fakeEngine{view: testView()}})
 	if err != nil {
 		t.Fatal(err)
 	}

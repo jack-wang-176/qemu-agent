@@ -2,6 +2,8 @@ package build
 
 import (
 	"errors"
+	"fmt"
+
 	"github.com/jack-wang-176/qemu-agent/internal/adapter/pipeline/current"
 	"github.com/jack-wang-176/qemu-agent/internal/modelingapi"
 	"github.com/jack-wang-176/qemu-agent/internal/modelingapp"
@@ -20,6 +22,12 @@ type ModelingServiceComponents struct {
 }
 
 func BuildModelingService(in ModelingServiceInput) (ModelingServiceComponents, error) {
+	if in.Legacy.Runner == nil {
+		return ModelingServiceComponents{}, errors.New("build modeling service: legacy runner is nil")
+	}
+	if in.Runtime == nil {
+		in.Runtime = in.Legacy.Runtime
+	}
 	if in.Runtime == nil {
 		return ModelingServiceComponents{}, errors.New("build modeling service: runtime factory is nil")
 	}
@@ -35,11 +43,11 @@ func BuildModelingService(in ModelingServiceInput) (ModelingServiceComponents, e
 	}
 	engine, err := current.NewEngine(deps)
 	if err != nil {
-		return ModelingServiceComponents{}, err
+		return ModelingServiceComponents{}, fmt.Errorf("build modeling service engine: %w", err)
 	}
 	adapter, err := current.NewQueryAdapter(in.Legacy.Runner)
 	if err != nil {
-		return ModelingServiceComponents{}, err
+		return ModelingServiceComponents{}, fmt.Errorf("build modeling service query: %w", err)
 	}
 	service, err := modelingapp.NewService(
 		modelingapp.Dependencies{
@@ -49,7 +57,7 @@ func BuildModelingService(in ModelingServiceInput) (ModelingServiceComponents, e
 		},
 	)
 	if err != nil {
-		return ModelingServiceComponents{}, err
+		return ModelingServiceComponents{}, fmt.Errorf("build modeling service application: %w", err)
 	}
 	return ModelingServiceComponents{
 		Service: service,

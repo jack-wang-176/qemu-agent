@@ -55,7 +55,7 @@ func (e *Engine) Describe(ctx context.Context, req pipelineapi.DescribeRequest) 
 		APIVersion:       "v1",
 		Operations:       ops,
 		ArtifactKinds:    []string{"plan", "regir", "code", "diff", "evidence"},
-		SupportsApply:    true,
+		SupportsApply:    false,
 		SupportsEvidence: true,
 		SupportsCancel:   false,
 		SupportsProgress: true,

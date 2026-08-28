@@ -34,8 +34,10 @@ import (
 	"strings"
 	"time"
 
+	runtimeadapter "github.com/jack-wang-176/qemu-agent/internal/adapter/runtime"
 	"github.com/jack-wang-176/qemu-agent/internal/config"
 	"github.com/jack-wang-176/qemu-agent/internal/modeling"
+	"github.com/jack-wang-176/qemu-agent/internal/modelingapp"
 	"github.com/jack-wang-176/qemu-agent/internal/tools/security"
 )
 
@@ -82,6 +84,9 @@ type ModelingComponents struct {
 	Artifacts modeling.ArtifactStore
 	Runner    modeling.Runner
 	Applier   modeling.Applier
+	// Runtime creates request-scoped pipeline ports over the same stores, model,
+	// and audited tools used by Runner. It remains nil while modeling is disabled.
+	Runtime modelingapp.RuntimeFactory
 	// WorkspaceID is the scope modeling projects are stored under. It is derived
 	// by the same WorkspaceID helper the knowledge layer uses, because two
 	// capabilities in one directory must agree on the id or a project created by
@@ -170,6 +175,14 @@ func BuildModeling(in ModelingInput) (ModelingComponents, error) {
 	}
 	components.Projects = projects
 	components.Artifacts = artifacts
+	tools := newModelingTools(in.Executor, in.NewID)
+	runtimeFactory, err := runtimeadapter.NewFactory(runtimeadapter.FactoryDependencies{
+		Projects: projects, Artifacts: artifacts, Completer: in.Completer, Tools: tools,
+	})
+	if err != nil {
+		return components, fmt.Errorf("build modeling runtime factory: %w", err)
+	}
+	components.Runtime = runtimeFactory
 
 	// 5: the stage registry, built once and immutable afterwards. What a project
 	// can do is therefore a property of the binary rather than of state somebody
@@ -186,7 +199,7 @@ func BuildModeling(in ModelingInput) (ModelingComponents, error) {
 			modeling.NewEmitStage(modeling.NewCRenderer(), cfg.AutoApply),
 			modeling.NewVerifyStage(cfg.BuildDir),
 		},
-		Tools:     newModelingTools(in.Executor, in.NewID),
+		Tools:     tools,
 		Completer: in.Completer,
 		Workspace: workspaceID,
 		QemuRoot:  cfg.QemuRoot,
