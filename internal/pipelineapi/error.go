@@ -1,5 +1,7 @@
 package pipelineapi
 
+import "errors"
+
 // error.go - Internal pipeline contract errors.
 //
 // pipelineapi remains independent of modelingapi. modelingapp maps these errors
@@ -45,4 +47,28 @@ func NewPortError(port PortName, message string, cause error) *PortError {
 		Cause:   cause,
 		Message: message,
 	}
+}
+
+type categorizedError interface {
+	ErrorCategory() string
+}
+
+// ErrorCategory returns a stable internal category without parsing error text.
+func ErrorCategory(err error) string {
+	if err == nil {
+		return ""
+	}
+	var categorized categorizedError
+	if errors.As(err, &categorized) {
+		return categorized.ErrorCategory()
+	}
+	var missing ErrMissingPort
+	if errors.As(err, &missing) {
+		return "unavailable"
+	}
+	var portErr *PortError
+	if errors.As(err, &portErr) {
+		return "unavailable"
+	}
+	return "internal"
 }

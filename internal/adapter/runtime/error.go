@@ -15,6 +15,13 @@ func (a *adapterError) Error() string {
 	return "runtime adapter: " + a.Category
 }
 
+func (a *adapterError) ErrorCategory() string {
+	if a == nil || a.Category == "" {
+		return "internal"
+	}
+	return a.Category
+}
+
 func mapCurrentError(err error) error {
 	if err == nil {
 		return err

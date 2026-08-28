@@ -15,6 +15,13 @@ func (c *currentError) Error() string {
 	return "current engine: " + c.category
 }
 
+func (c *currentError) ErrorCategory() string {
+	if c == nil || c.category == "" {
+		return "internal"
+	}
+	return c.category
+}
+
 func mapCurrentError(err error) error {
 	if err == nil {
 		return err

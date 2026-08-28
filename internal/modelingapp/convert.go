@@ -9,7 +9,6 @@ import (
 )
 
 func engineViewToProjectView(in pipelineapi.EngineView) (modelingapi.ProjectView, error) {
-	// TODO: copy descriptors and map status without exposing internal fields.
 	status, err := projectStatusToAPI(in.Status)
 	if err != nil {
 		return modelingapi.ProjectView{}, err
@@ -36,7 +35,9 @@ func engineViewToProjectView(in pipelineapi.EngineView) (modelingapi.ProjectView
 		CreatedAt:        in.CreatedAt,
 		UpdatedAt:        in.UpdatedAt,
 	}
-	if in.LastError != "" {
+	if in.Status == pipelineapi.StatusBlocked && in.LastError == "awaiting_apply" {
+		view.BlockedReason = "awaiting_apply"
+	} else if in.LastError != "" {
 		public := publicErrorForCategory(in.LastError)
 		view.PublicError = &public
 	}

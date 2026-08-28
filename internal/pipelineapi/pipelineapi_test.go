@@ -151,6 +151,16 @@ func TestPortErrorUnwrap(t *testing.T) {
 	}
 }
 
+func TestErrorCategoryUsesTypedErrors(t *testing.T) {
+	if got := ErrorCategory(ErrMissingPort(PortEvent)); got != "unavailable" {
+		t.Fatalf("missing port category = %q", got)
+	}
+	cause := errors.New("provider endpoint and token")
+	if got := ErrorCategory(NewPortError(PortCompletion, "complete", cause)); got != "unavailable" {
+		t.Fatalf("port error category = %q", got)
+	}
+}
+
 type repositoryStub struct{}
 
 func (repositoryStub) CreateProject(context.Context, ProjectRecord) (ProjectRecord, error) {

@@ -44,6 +44,7 @@ type ProjectView struct {
 	Recommended      []OperationDescriptor // Supplied by the Engine.
 	Artifacts        []ArtifactDescriptor
 	EvidenceCount    int
+	BlockedReason    string // Stable workflow category; never raw internal error text.
 	PublicError      *PublicError
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
@@ -138,6 +139,14 @@ func ValidateProjectView(v ProjectView) error {
 	}
 	if v.EvidenceCount < 0 {
 		return errInvalid("modelingapi: negative evidence count")
+	}
+	if v.BlockedReason != "" {
+		if v.Status != ProjectBlocked {
+			return errInvalid("modelingapi: blocked reason requires blocked project status")
+		}
+		if v.BlockedReason != "awaiting_apply" {
+			return errInvalid("modelingapi: unknown blocked reason")
+		}
 	}
 	if v.CreatedAt.IsZero() || v.UpdatedAt.IsZero() || v.UpdatedAt.Before(v.CreatedAt) {
 		return errInvalid("modelingapi: invalid project timestamps")

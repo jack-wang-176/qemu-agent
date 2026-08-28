@@ -10,20 +10,20 @@ import (
 )
 
 type Service struct {
-	runtimePorts pipelineapi.RuntimePorts
+	runtimePorts RuntimeFactory
 	queryPort    pipelineapi.QueryPort
 	engine       pipelineapi.Engine
 }
 
 type Dependencies struct {
-	RuntimePorts pipelineapi.RuntimePorts
+	RuntimePorts RuntimeFactory
 	QueryPort    pipelineapi.QueryPort
 	Engine       pipelineapi.Engine
 }
 
 func NewService(deps Dependencies) (*Service, error) {
-	if err := pipelineapi.ValidatePorts(deps.RuntimePorts); err != nil {
-		return nil, fmt.Errorf("modelingapp: invalid runtime ports: %w", err)
+	if deps.RuntimePorts == nil {
+		return nil, fmt.Errorf("modelingapp: invalid runtime factory")
 	}
 	if deps.QueryPort == nil {
 		return nil, errors.New("modelingapp: query port is nil")
@@ -48,7 +48,6 @@ func (s *Service) Show(ctx context.Context, call modelingapi.CallContext, req mo
 	if err != nil {
 		return modelingapi.ProjectView{}, mapInternalError(err)
 	}
-
 	engineView, err := s.engine.Inspect(ctx, pipelineapi.InspectRequest{
 		Scope:     scope,
 		ProjectID: pipelineapi.ProjectID(req.ProjectID),
@@ -86,11 +85,15 @@ func (s *Service) Create(ctx context.Context, call modelingapi.CallContext, req 
 	if err := modelingapi.ValidateCreateRequest(req); err != nil {
 		return modelingapi.ProjectView{}, err
 	}
-	scope, _, err := deriveContext(call, "Create")
+	scope, invocation, err := deriveContext(call, "Create")
 	if err != nil {
 		return modelingapi.ProjectView{}, err
 	}
-	record, err := s.runtimePorts.Repository.CreateProject(ctx, pipelineapi.ProjectRecord{Scope: scope, Title: req.Title, Current: "plan", Status: pipelineapi.StatusPending})
+	ports, err := s.runtimePorts.Build(ctx, scope, invocation)
+	if err != nil {
+		return modelingapi.ProjectView{}, mapInternalError(err)
+	}
+	record, err := ports.Repository.CreateProject(ctx, pipelineapi.ProjectRecord{Scope: scope, Title: req.Title, Current: "plan", Status: pipelineapi.StatusPending})
 	if err != nil {
 		return modelingapi.ProjectView{}, mapInternalError(err)
 	}
@@ -158,28 +161,22 @@ func (s *Service) buildExecuteRequest(
 	for i, source := range req.Sources {
 		sources[i] = sourceRefToPipeline(source)
 	}
-	project, err := s.engine.Inspect(ctx, pipelineapi.InspectRequest{Scope: scope, ProjectID: pipelineapi.ProjectID(req.ProjectID), Revision: req.ExpectedRevision})
+	ports, err := s.runtimePorts.Build(ctx, scope, invocation)
 	if err != nil {
 		return pipelineapi.ExecuteRequest{}, mapInternalError(err)
 	}
-	if req.ExpectedRevision > 0 && project.Revision != req.ExpectedRevision {
-		return pipelineapi.ExecuteRequest{}, &modelingapi.Error{Public: modelingapi.NewPublicError(modelingapi.ErrorConflict, "The modeling project changed before the operation started.", true, map[string]string{"current_revision": fmt.Sprint(project.Revision), "expected_revision": fmt.Sprint(req.ExpectedRevision)}), Cause: errors.New("modelingapp: expected revision does not match current project")}
-	}
-	operation := pipelineapi.OperationName(req.Operation)
-	if operation == "" {
-		operation = project.CurrentOperation
-	}
+
 	request := pipelineapi.ExecuteRequest{
 		Project: pipelineapi.ProjectSnapshot{
 			ID:       pipelineapi.ProjectID(req.ProjectID),
-			Revision: project.Revision,
+			Revision: req.ExpectedRevision,
 			Scope:    scope,
 		},
-		Operation:        operation,
+		Operation:        pipelineapi.OperationName(req.Operation),
 		Instruction:      req.Instruction,
 		ExpectedRevision: req.ExpectedRevision,
 		Invocation:       invocation,
-		Ports:            s.runtimePorts,
+		Ports:            ports,
 		Sources:          sources,
 	}
 	if err := request.Validate(); err != nil {
@@ -188,33 +185,15 @@ func (s *Service) buildExecuteRequest(
 	return request.Clone(), nil
 }
 
-func (s *Service) Reset(_ context.Context, call modelingapi.CallContext, req modelingapi.ResetRequest) (modelingapi.ProjectView, error) {
-	if err := modelingapi.ValidateResetRequest(req); err != nil {
-		return modelingapi.ProjectView{}, err
-	}
-	if _, _, err := deriveContext(call, "Reset"); err != nil {
-		return modelingapi.ProjectView{}, err
-	}
+func (s *Service) Reset(context.Context, modelingapi.CallContext, modelingapi.ResetRequest) (modelingapi.ProjectView, error) {
 	return modelingapi.ProjectView{}, unsupported("reset")
 }
 
-func (s *Service) PlanApply(_ context.Context, call modelingapi.CallContext, req modelingapi.PlanApplyRequest) (modelingapi.ApplyPreview, error) {
-	if err := modelingapi.ValidatePlanApplyRequest(req); err != nil {
-		return modelingapi.ApplyPreview{}, err
-	}
-	if _, _, err := deriveContext(call, "PlanApply"); err != nil {
-		return modelingapi.ApplyPreview{}, err
-	}
+func (s *Service) PlanApply(context.Context, modelingapi.CallContext, modelingapi.PlanApplyRequest) (modelingapi.ApplyPreview, error) {
 	return modelingapi.ApplyPreview{}, unsupported("plan_apply")
 }
 
-func (s *Service) Apply(_ context.Context, call modelingapi.CallContext, req modelingapi.ApplyRequest) (modelingapi.OperationResult, error) {
-	if err := modelingapi.ValidateApplyRequest(req); err != nil {
-		return modelingapi.OperationResult{}, err
-	}
-	if _, _, err := deriveContext(call, "Apply"); err != nil {
-		return modelingapi.OperationResult{}, err
-	}
+func (s *Service) Apply(context.Context, modelingapi.CallContext, modelingapi.ApplyRequest) (modelingapi.OperationResult, error) {
 	return modelingapi.OperationResult{}, unsupported("apply")
 }
 
